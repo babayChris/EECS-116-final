@@ -1,0 +1,3 @@
+[submodule "viobench"]
+	path = viobench
+	url = https://github.com/jonas-eschmann/viobench.git

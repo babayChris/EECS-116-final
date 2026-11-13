@@ -1,0 +1,23 @@
+# Versions from the recorded macOS arm64 / Python 3.14.6 host run.
+# Reproducing this environment does not make host timings equivalent to WASM fuel.
+cmake==4.4.4
+conta==0.0.7
+contourpy==1.4.0
+cycler==0.12.1
+fonttools==4.68.0
+hyperdrone==0.1.10
+hyperlux==0.1.10
+kiwisolver==1.5.1
+matplotlib==3.11.2
+nanobind==3.1.0
+numpy==2.5.4
+opencv-python-headless==5.0.0.93
+packaging==26.3
+pillow==13.0.0
+pyparsing==3.3.3
+python-dateutil==4.0.0
+pyyaml==6.0.3
+tzdata==2026.6
+wasmtime==50.0.1
+-e ./viobench
+

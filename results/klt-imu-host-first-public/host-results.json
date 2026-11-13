@@ -1,0 +1,51 @@
+{
+  "recorded_at_utc": "2026-11-13T20:10:49.129716+00:00",
+  "mode": "host debug; no Wasmtime fuel or sandbox limits",
+  "baseline": "unmodified upstream klt_imu",
+  "repository_commit": "17303aa14ba14e16cb54d9291d684371e1d3b548",
+  "solution_sha256": "e6206f62128469ce1e9cf814f32b985219ca8a8f38de60d2b7ec8f3ce486b1d7",
+  "episode": {
+    "description": "viobench-public/sim-ProcTHOR-Train-1-0000.zip",
+    "hash": "0386e5c941b50fe9972ddabff84c414540fb8989"
+  },
+  "episode_count": 1,
+  "resolution": [
+    320,
+    240
+  ],
+  "python": "3.14.6",
+  "architecture": "arm64",
+  "versions": {
+    "wasmtime": "50.0.1",
+    "numpy": "2.5.4",
+    "opencv-python-headless": "5.0.0.93",
+    "cmake": "4.4.4"
+  },
+  "metrics": {
+    "frames": 1200,
+    "filled_frames": 0,
+    "rpe_translation_rmse": 21.576272880951358,
+    "rpe_rotation_rmse": 0.019153981616531986,
+    "rpe_pairs": 1180,
+    "ate_rmse": 482.1920646125194,
+    "rotation_rmse": 0.4708845601453321,
+    "rotation_max": 0.7055585408688614,
+    "velocity_rmse": 22.18314779616964,
+    "angular_velocity_rmse": 0.12237734729075034,
+    "sim3_scale": 0.012157218002756728,
+    "sim3_ate_rmse": 1.9759735886407797,
+    "distance_travelled": 19.27355608046622,
+    "final_drift": 864.0039037291576,
+    "drift_per_metre": 44.828463420137965
+  },
+  "metrics_note": "Recomputed with upstream metrics from saved estimates rounded to 9 significant digits.",
+  "fuel_per_frame_max": null,
+  "host_median_ms_per_frame_from_log_rounded": 0.7,
+  "command": "CONTA_CACHE=\"$PWD/work/conta-cache\" MPLCONFIGDIR=\"$PWD/work/matplotlib\" .venv-vio/bin/viobench debug viobench/viobench/solution/examples/python/klt_imu --max-episodes 1 -o outputs/local-benchmark/klt-imu-host",
+  "limitations": [
+    "Only the first public validation episode; not a generalization estimate.",
+    "Host NumPy and OpenCV differ from the WASM runtime.",
+    "No official fuel score or sandbox validation measured.",
+    "No parameters tuned and no models trained."
+  ]
+}

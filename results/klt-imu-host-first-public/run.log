@@ -1,0 +1,4 @@
+conta: refreshing the index from https://conta.rl.tools/version/1/meta.json
+conta: downloading 0386e5c941b50fe9972ddabff84c414540fb8989 (viobench-public/sim-ProcTHOR-Train-1-0000.zip) from https://huggingface.co/datasets/conta-shards/viobench-public/resolve/main/data/0386e5c941b50fe9972ddabff84c414540fb8989.gz
+video: outputs/local-benchmark/klt-imu-host/0386e5c941b50fe9972ddabff84c414540fb8989/trajectory.mp4
+0386e5c941b50fe9972ddabff84c414540fb8989: Sim(3) ATE 1.976 m  RPE 21.576 m/1 s  ATE 482.192 m  rot 27.0 deg  vel 22.183 m/s  filled 0  0.7 ms/frame (host, no fuel)
