@@ -20,4 +20,3 @@ pyyaml==6.0.3
 tzdata==2026.6
 wasmtime==50.0.1
 -e ./viobench
-

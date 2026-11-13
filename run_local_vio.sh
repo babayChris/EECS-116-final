@@ -40,4 +40,3 @@ case "$mode" in
       -o "outputs/local-benchmark/$baseline-wasm"
     ;;
 esac
-

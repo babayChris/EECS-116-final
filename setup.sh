@@ -25,4 +25,3 @@ else
 fi
 .venv-vio/bin/viobench --help >/dev/null
 echo "Ready. First run: bash run_local_vio.sh host klt_imu 1"
-
