@@ -2,7 +2,7 @@
 
 Reproducible local experiments with [VIOBench](https://github.com/jonas-eschmann/viobench), focused on trajectory accuracy versus maximum per-frame WebAssembly fuel.
 
-**Current status (November 13, 2026):** a bounded-compute KLT + IMU estimator (`solutions/klt_bounded/`, derived from the upstream example) with gyro-aided translation directions, constant-speed fusion and persistent tracks reaches 0.47–0.52 m mean Sim(3) ATE at 14–20 M peak fuel per frame in the local WASM sandbox (upstream KLT + IMU: 2.042 m at 142 M; OpenVINS: 0.420 m at 3,548 M). On 8 held-out simulated episodes never used for tuning it gets 0.51–0.56 m. These are local results with stand-in baselines and settings tuned on the public validation set; no server comparison or submission yet. Details: `AGENTS.md` and `results/klt-bounded/`.
+**Current status (November 13, 2026):** a bounded-compute KLT + IMU estimator (`solutions/klt_bounded/`, derived from the upstream example) with gyro-aided translation directions, constant-speed fusion and persistent tracks reaches 0.47–0.52 m mean Sim(3) ATE at 14–20 M peak fuel per frame in the local WASM sandbox (upstream KLT + IMU: 2.042 m at 142 M; OpenVINS: 0.420 m at 3,548 M). On 8 held-out simulated episodes never used for tuning it gets 0.51–0.56 m. These are local results with stand-in baselines and settings tuned on the public validation set; no server comparison or submission yet. Write-up with figures: [`REPORT.md`](REPORT.md). Details: `AGENTS.md` and `results/klt-bounded/`.
 
 Workflow for the custom estimator (after `bash setup.sh` and one WASM runtime build via `bash run_local_vio.sh wasm klt_imu 1`):
 
