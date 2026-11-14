@@ -2,7 +2,18 @@
 
 Reproducible local experiments with [VIOBench](https://github.com/jonas-eschmann/viobench), focused on trajectory accuracy versus maximum per-frame WebAssembly fuel.
 
-**Current status:** one unmodified KLT + IMU baseline has completed one public episode in host debugging mode. WASM evaluation, feature-budget variants, and any improvement beyond the shared Pareto frontier are **not yet demonstrated**.
+**Current status (November 13, 2026):** a bounded-compute KLT + IMU estimator (`solutions/klt_bounded/`, derived from the upstream example) with gyro-aided translation directions, constant-speed fusion and persistent tracks reaches 0.47–0.52 m mean Sim(3) ATE at 14–20 M peak fuel per frame in the local WASM sandbox (upstream KLT + IMU: 2.042 m at 142 M; OpenVINS: 0.420 m at 3,548 M). On 8 held-out simulated episodes never used for tuning it gets 0.51–0.56 m. These are local results with stand-in baselines and settings tuned on the public validation set; no server comparison or submission yet. Details: `AGENTS.md` and `results/klt-bounded/`.
+
+Workflow for the custom estimator (after `bash setup.sh` and one WASM runtime build via `bash run_local_vio.sh wasm klt_imu 1`):
+
+```bash
+bash scripts/run_variants.sh 10 4 e3_persist05          # bundle + sandbox-evaluate variants from solutions/klt_bounded/variants.json
+bash scripts/host_screen.sh 10 6 e3_persist05            # quick host accuracy screen (no fuel)
+bash scripts/make_heldout.sh                             # simulate the held-out set (CPU renderer; hours)
+bash scripts/eval_heldout.sh 4 klt_imu e3_persist05      # score built .wasm files on it
+.venv-vio/bin/python tests/test_klt_bounded.py           # unit checks
+.venv-vio/bin/python scripts/build_progress_page.py      # progress page from local reports
+```
 
 ## Code and attribution
 

@@ -1,6 +1,6 @@
 # Agent handoff — EECS 116 Final
 
-Last updated: November 13, 2026 (America/Los_Angeles).
+Last updated: November 13, 2026 (America/Los_Angeles), after stage 2, the broader study and the held-out check.
 
 ## Goal and conversation context
 
@@ -49,11 +49,81 @@ Reference episode: `0386e5c941b50fe9972ddabff84c414540fb8989`, 320 × 240 RGB.
 
 For a sanity check, scoring constant identity-pose predictions on the same episode gives **4.345154 m** aligned error. This is an offline calculation in `score_saved_run.py`, not a separately evaluated WASM baseline. The KLT result captures useful trajectory structure, but its large unaligned error indicates severe drift/scale problems. Sim(3) alignment can hide scale error.
 
+## Update, November 13, 2026: WASM baselines and bounded-compute KLT (stage 1)
+
+Measured on WSL2 Linux x86_64, Python 3.14.5, wasmtime 50.0.1, default local limits, all 10 pinned public episodes,
+every run 10/10 completed with 0 filled frames. Compact record: `results/klt-bounded/summary.json`.
+
+| | Mean Sim(3) ATE | Max fuel/frame | Median fuel |
+|---|---:|---:|---:|
+| minimal (upstream) | 3.239 m | 0.21 M | 0.09 M |
+| dead_reckoning (upstream) | 2.152 m | 4.2 M | 4.1 M |
+| klt_imu (upstream) | 2.042 m | 142.0 M | 58.2 M |
+| `v23_quarter_c40` (ours) | 2.003 m | 35.7 M | 8.6 M |
+
+- `solutions/klt_bounded/solution.py` is the upstream KLT estimator (attributed) with parameterized compute bounds;
+  `variants.json` holds every measured configuration; `scripts/run_variants.sh` bundles and evaluates them.
+- Diagnosis (`scripts/profile_klt.py`, `scripts/explain_fuel.py`): peak frames are essential-matrix RANSAC +
+  recoverPose, whose cost scales with outliers via adaptive iterations; typical frames are LK cost per track. A one-time
+  ~35 M cost on the first fully tracked frame is moved into init by a warm-up that drives a throwaway estimator copy.
+- Local improvement with the server's `dominated_area` formula and the three upstream examples as stand-in baselines:
+  +0.11% of the box. Not a server result. Accuracy, not fuel, is now the larger lever.
+- `viobench simulate` (tiny_cnn training data) fails on WSL: OptiX unavailable; borrowed Linux 590.48 OptiX libraries
+  initialize but module compilation fails (7299). Use native Windows or a Linux GPU machine.
+- Progress page: `scripts/build_progress_page.py` writes `outputs/progress/index.html` from local reports.
+
+## Update, November 13, 2026 (later): stage 2, accuracy at a bounded budget
+
+Same setup, all 10 public episodes, every run completed with 0 filled frames; all in `results/klt-bounded/summary.json`.
+
+| | Mean Sim(3) ATE | Max fuel/frame |
+|---|---:|---:|
+| klt_imu (upstream) | 2.042 m | 142.0 M |
+| `v23_quarter_c40` (stage 1) | 2.003 m | 35.7 M |
+| `v56_cs_par025_coast` | 0.637 m | 14.7 M |
+| `v61_v56_h16` (best) | 0.562 m | 14.4 M |
+
+- `direction: known_rotation`: gyro rotation between frames + 2-point linear hypotheses for the translation direction,
+  epipolar-distance residuals, weighted refinement, cheirality sign. Median direction error vs ground truth 12° versus
+  46–50° for the essential matrix (`scripts/direction_accuracy.py`). Unit checks: `tests/test_klt_bounded.py`.
+- `fusion: constant_speed` + `no_vision: coast` + `min_derotated_parallax_px: 0.25`: the accelerometer no longer
+  sets translation; Sim(3) alignment supplies the scale. This was the main accuracy gain. It assumes roughly steady
+  flight speed and was tuned on the public validation episodes: check generalization before relying on it.
+- Local improvement (server formula, stand-in baselines): +4.95% of the box. `scripts/host_screen.sh` screens accuracy
+  on the host quickly; sandbox accuracy matched host accuracy exactly for all stage 2 variants.
+
+## Update, November 13, 2026 (end of day): broader study, native baselines, held-out set
+
+All sandbox numbers: WASM, default local limits, public set unless noted. Records: `results/klt-bounded/summary.json`
+(sandbox), `host_study.json` (host screening, public + held-out), `heldout.json` (held-out set).
+
+| | Public ATE | Held-out ATE (8 ep.) | Peak fuel/frame |
+|---|---:|---:|---:|
+| klt_imu (upstream) | 2.042 m | 1.574 m | 142 M (234 M held-out) |
+| VINS-Mono (upstream native) | 0.604 m (1 episode failed) | not run | 1,591 M |
+| OpenVINS (upstream native) | 0.420 m | not run | 3,548 M |
+| `e3_persist05` | 0.520 m | 0.556 m | 14.2 M |
+| `e4_p05_fb1` | 0.486 m | 0.521 m | 16.1 M |
+| `e5_p05_base3` | 0.471 m | 0.513 m | 19.8 M |
+
+- Evaluation environment: the server worker (`viobench/tools/server/worker.py`) runs the same `viobench evaluate`
+  with its saved limits and the same pinned wasmtime 50.0.1; the upload contains our runtime, so results reproduce
+  for the same episodes and limits. Unknown: the server's episode selection (`public+private-10` preset exists; the
+  private episodes are not downloadable, and should not be sought) and limit changes.
+- Held-out set: `scripts/make_heldout.sh` with `HYPERLUX_BACKEND=GENERIC` (CPU renderer, works under WSL; ProcTHOR
+  ~40 min per one-minute episode, HSSD much slower and up to ~6.5 GB RAM). 8 of 10 episodes exist (hssd-b/c stopped).
+  Never tune on it. `scripts/eval_heldout.sh` scores existing .wasm files on it.
+- Study findings: seed noise ±0.02 m; persistent tracks (E3) clearly better and cheaper; forward-backward check (E4)
+  and 3-frame baseline (E5) small gains; flow-based speed worse; tilt correction no effect; fuel floor without vision
+  4.5 M (Python/IMU/state), so a native C++ port is the next fuel lever.
+- Local improvement (server formula; stand-in baselines = 3 upstream Python examples + OpenVINS + VINS-Mono): +3.69%.
+- Defined but not run: the `w_*` resolution × corner sweep on `c_best` (persist05 + fb1 + base3), and ORB-SLAM3's
+  evaluation (it builds and passes check). The machine is shared with the user's other long jobs: limit parallelism.
+
 ## Not completed or not known
 
-- No WASM runtime build, `check`, or `evaluate` run has completed in this project.
-- No measured fuel, full-public-set benchmark, measured dead-reckoning run, or modified-estimator experiment exists here yet.
-- No training, learned weights, feature-budget variants, or custom estimator have been produced.
+- No live-server comparison, submission, or measurement under the server's `/config` limits.
+- No training or learned weights. Held-out set incomplete (8 of 10; one HSSD episode). No native port of our estimator.
 - No competition submission has been made.
 - The live server URL, current baseline points, selected evaluation hashes, and current server limits have not been obtained. A live Pareto comparison is therefore unavailable.
 - Do not infer a Pareto win from the one-episode host result, upstream illustrative fuel numbers, or a paper's hardware timings.
