@@ -35,7 +35,14 @@ Stage 2 options (off by default):
   direction_smoothing  constant_speed only: weight in [0, 1) of the previous world direction in an exponential
                    average with the new one (0: none)
   speed_model      constant_speed only: "constant" (default) or "flow": step length scaled by
-                   (derotated image motion / its running average) ** speed_flow_alpha, clipped to speed_flow_clip
+                   (derotated image motion / its running average) ** speed_flow_alpha, clipped to speed_flow_clip;
+                   or "metric": speed from a sliding-window least-squares fit of the IMU velocity changes to the
+                   visual directions. Over the last metric_window_s seconds, s_k d_k = c + V_k + b (t_k - t_now)
+                   for every frame k with a direction d_k, where V_k is the integrated IMU velocity change and the
+                   unknowns are the speeds s_k, the start velocity c and a constant world-frame bias b (accelerometer
+                   bias and tilt leakage of gravity). metric_smooth ties neighbouring speeds, metric_prior pulls them
+                   weakly toward the current estimate (straight, steady flight carries no scale information). The
+                   newest speed, clipped to metric_clip, updates the estimate with weight metric_alpha.
   tilt_tau         if set, roll and pitch are pulled toward the long-run average of the specific force (world frame)
                    with this time constant (s); on a multirotor the accelerometer shows gravity only on average
   track_mode       "redetect" (upstream: new corners every frame) or "persist": tracks are kept and topped up with
@@ -102,6 +109,16 @@ REPLENISH_FRACTION = float(PARAMS.get("replenish_fraction", 0.7))
 RNG_SEED = int(PARAMS.get("rng_seed", 0))
 LK_FB_PX = PARAMS.get("lk_fb_px")
 BASELINE_FRAMES = int(PARAMS.get("baseline_frames", 1))
+METRIC_WINDOW_S = float(PARAMS.get("metric_window_s", 2.0))
+METRIC_SMOOTH = float(PARAMS.get("metric_smooth", 1.0))
+METRIC_PRIOR = float(PARAMS.get("metric_prior", 0.1))
+METRIC_BIAS = bool(PARAMS.get("metric_bias", True))
+METRIC_MIN_DIRECTIONS = int(PARAMS.get("metric_min_directions", 8))
+METRIC_MAX_DIRECTIONS = int(PARAMS.get("metric_max_directions", 48))
+METRIC_ALPHA = float(PARAMS.get("metric_alpha", 0.3))
+METRIC_CLIP = tuple(PARAMS.get("metric_clip", [0.05, 4.0]))
+METRIC_ANCHOR = PARAMS.get("metric_anchor", "estimate")  # prior target: "estimate" (current) or "prior" (speed_prior)
+METRIC_BIAS_WEIGHT = float(PARAMS.get("metric_bias_weight", 0.0))  # ridge on the bias (per s^2 of window)
 PROBE = PARAMS.get("probe")  # measurement only: "imu_only" skips all vision work (fuel floor of the rest)
 
 
@@ -151,6 +168,9 @@ class Solution:
         self.ids = None  # identity of each entry of previous_points
         self.id_counter = 0
         self.history = []  # (ids, points, R_wc) of recent frames, for baseline_frames > 1
+        self.metric_velocity = np.zeros(3)  # integrated IMU velocity change since start (speed_model metric)
+        self.metric_window = []  # (t_mid, velocity change at mid-interval, world direction or None)
+        self.metric_speed = SPEED_PRIOR
         if warm:
             self._warmup(config)
 
@@ -401,11 +421,17 @@ class Solution:
             return self._state()
 
         R_wb_before = self.R_wb.copy()
+        v_before = self.v.copy()
         displacement_imu = self._integrate_vectorized(imu) if IMU_VECTORIZED else self._integrate(imu)
         R_c1_c0 = (self.R_wb @ self.R_bc).T @ (R_wb_before @ self.R_bc)
         self.last_flow = None
         direction_camera = None if PROBE == "imu_only" else self._track(frame, R_c1_c0)
         dt = max(imu[-1, 0] - imu[0, 0] + (imu[1, 0] - imu[0, 0] if len(imu) > 1 else 0.0), 1e-3) if len(imu) else 0.05
+        if SPEED_MODEL == "metric":
+            dv = self.v - v_before
+            t_mid = (imu[-1, 0] if len(imu) else t) - 0.5 * dt
+            velocity_mid = self.metric_velocity + 0.5 * dv
+            self.metric_velocity = self.metric_velocity + dv
         if direction_camera is not None:
             R_wc_previous = R_wb_before @ self.R_bc
             direction_world = R_wc_previous @ direction_camera
@@ -434,6 +460,9 @@ class Solution:
                         self.flow_average = float(np.exp((1 - a) * np.log(self.flow_average) + a * np.log(rate)))
                     speed = SPEED_PRIOR * float(np.clip((rate / self.flow_average) ** SPEED_FLOW_ALPHA, *SPEED_FLOW_CLIP))
                     self.last_speed = speed
+                elif SPEED_MODEL == "metric":
+                    self._metric_push(t_mid, velocity_mid, direction_world)
+                    speed = self.last_speed = self._metric_fit()
                 displacement = speed * dt * direction_world
                 self.p += displacement - displacement_imu
                 self.v = displacement / dt
@@ -444,6 +473,8 @@ class Solution:
                 self.p += correction
                 self.v = 0.5 * self.v + 0.5 * displacement / dt
         elif FUSION == "constant_speed":
+            if SPEED_MODEL == "metric":
+                self._metric_push(t_mid, velocity_mid, None)
             self.p -= displacement_imu
             if NO_VISION == "coast" and self.last_direction is not None:
                 speed = getattr(self, "last_speed", SPEED_PRIOR)
@@ -464,6 +495,43 @@ class Solution:
                                  self.R_wb @ self.R_bc))
             del self.history[:-BASELINE_FRAMES]
         return self._state()
+
+    def _metric_push(self, t_mid, velocity, direction):
+        self.metric_window.append((t_mid, velocity, direction))
+        while self.metric_window and self.metric_window[0][0] < t_mid - METRIC_WINDOW_S:
+            self.metric_window.pop(0)
+
+    def _metric_fit(self):
+        """Speed (m/s) at the newest frame from the sliding window; see speed_model "metric"."""
+        rows = [(t, v, d) for t, v, d in self.metric_window if d is not None][-METRIC_MAX_DIRECTIONS:]
+        m = len(rows)
+        if m < METRIC_MIN_DIRECTIONS:
+            return self.metric_speed
+        t_now, v_now = rows[-1][0], rows[-1][1]
+        extra = 6 if METRIC_BIAS else 3
+        ridge = 3 if METRIC_BIAS and METRIC_BIAS_WEIGHT > 0 else 0
+        A = np.zeros((3 * m + (m - 1) + m + ridge, m + extra))
+        y = np.zeros(A.shape[0])
+        for k, (t, v, d) in enumerate(rows):  # s_k d_k - c - b (t_k - t_now) = V_k - V_now
+            r = slice(3 * k, 3 * k + 3)
+            A[r, k] = d
+            A[r, m:m + 3] = -np.eye(3)
+            if METRIC_BIAS:
+                A[r, m + 3:m + 6] = -(t - t_now) * np.eye(3)
+            y[r] = v - v_now
+        o = 3 * m
+        idx = np.arange(m - 1)
+        A[o + idx, idx] = -METRIC_SMOOTH
+        A[o + idx, idx + 1] = METRIC_SMOOTH
+        o += m - 1
+        A[o + np.arange(m), np.arange(m)] = METRIC_PRIOR
+        y[o:o + m] = METRIC_PRIOR * (SPEED_PRIOR if METRIC_ANCHOR == "prior" else self.metric_speed)
+        if ridge:
+            A[o + m + np.arange(3), m + 3 + np.arange(3)] = METRIC_BIAS_WEIGHT
+        x = np.linalg.lstsq(A, y, rcond=None)[0]
+        s = float(np.clip(x[m - 1], *METRIC_CLIP))
+        self.metric_speed = (1 - METRIC_ALPHA) * self.metric_speed + METRIC_ALPHA * s
+        return self.metric_speed
 
     def _direction_multiframe(self):
         """World direction of motion from the frame baseline_frames ago to now, using tracks seen in both."""

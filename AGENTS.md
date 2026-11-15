@@ -120,6 +120,22 @@ All sandbox numbers: WASM, default local limits, public set unless noted. Record
 - Defined but not run: the `w_*` resolution × corner sweep on `c_best` (persist05 + fb1 + base3), and ORB-SLAM3's
   evaluation (it builds and passes check). The machine is shared with the user's other long jobs: limit parallelism.
 
+## Update, November 14, 2026: server baselines, fuel sweep and metric scale (both negative)
+
+Record: `results/klt-bounded/nov14_study.json`.
+
+- Server (current set: 20 episodes; limits equal the local defaults: 20 G fuel/step, 200 G init, 2 GiB, 2 uploads/day).
+  Baselines include `tiny_cnn` at 0.668 m / 14.7 M and VINS-Mono at 0.506 m / 1.88 G, so the estimated area for our
+  points is about +0.9% (e5 alone) and +0.96% (e3 + e5), not the +3.69% against local stand-ins. Planned first
+  uploads: `e5_p05_base3` and `e3_persist05`.
+- Fuel sweep (`f*`, sandbox): more corners, resolution, pyramid levels or hypotheses (21-55 M) gave 0.465-0.495 m,
+  within noise of e5. Vision quality is not the limit.
+- Metric scale (`speed_model: "metric"`, `m*`, host): a sliding-window fit of speeds to IMU velocity changes along
+  the visual directions. Every setting lost to constant speed (best 0.520 m). Cause: tilt error of 6-28 deg leaks
+  1-4.7 m/s^2 of gravity, 10-50x the flights' true accelerations (median 0.09 m/s^2). The option stays in
+  `solution.py`, off by default.
+- Next: the native C++ port of the e3/e5 estimator, to remove the 4.5 M/frame Python floor (`native/klt_bounded/`).
+
 ## Not completed or not known
 
 - No live-server comparison, submission, or measurement under the server's `/config` limits.
