@@ -159,6 +159,7 @@ public:
         if (P_BIAS_BASELINE > 1) update_gyro_bias();
         frame.copyTo(previous_frame_);
         replenish(frame);
+        if (P_TRACE) std::fprintf(stderr, "F %d dir %d kept %d prev %d\n", frame_index_++, (int)have_direction, trace_kept_, (int)previous_points_.size());
         const int keep = std::max(P_BASELINE_FRAMES, P_BIAS_BASELINE);
         if (keep > 1) {
             history_.push_back(Frame{ids_, previous_points_, R_wb_ * R_bc_, last_t_});
@@ -318,7 +319,9 @@ private:
     }
 
     bool track(const cv::Mat& frame, const Mat3& R_c1_c0, Vec3& direction) {
-        if (previous_frame_.empty() || (int)previous_points_.size() < P_MIN_TRACKS) return false;
+        // strips: track any surviving points so a partial refill accumulates; otherwise the upstream early exit
+        const int needed = P_DETECT_STRIPS > 0 ? 1 : P_MIN_TRACKS;
+        if (previous_frame_.empty() || (int)previous_points_.size() < needed) return false;
         std::vector<cv::Point2f> tracked;
         std::vector<uchar> status;
         std::vector<float> error;
@@ -466,6 +469,31 @@ private:
         kept.swap(next_points_);
         kept_ids.swap(next_ids_);
         has_next_ = false;
+        trace_kept_ = usable ? (int)kept.size() : -1;
+        if (P_DETECT_STRIPS > 0) {  // bounded detection: only one horizontal strip of the image per frame, cycling
+            if (!usable) {
+                kept.clear();
+                kept_ids.clear();
+            }
+            ids_ = kept_ids;
+            if (usable && kept.size() >= P_REPLENISH_FRACTION * P_MAX_CORNERS) {
+                previous_points_ = kept;
+                return;
+            }
+            const int strips = P_DETECT_STRIPS, k = strip_++ % strips;
+            const int y0 = frame.rows * k / strips, y1 = frame.rows * (k + 1) / strips;
+            const cv::Rect roi(0, y0, frame.cols, y1 - y0);
+            cv::Mat mask(roi.size(), CV_8U, cv::Scalar(255));
+            for (const auto& q : kept) cv::circle(mask, cv::Point((int)q.x, (int)q.y - y0), (int)P_MIN_DISTANCE, cv::Scalar(0), -1);
+            std::vector<cv::Point2f> fresh;
+            const int want = std::max(1, std::min(P_MAX_CORNERS - (int)kept.size(), (P_MAX_CORNERS + strips - 1) / strips + 2));
+            cv::goodFeaturesToTrack(frame(roi), fresh, want, P_QUALITY, P_MIN_DISTANCE, mask, P_BLOCK_SIZE);
+            for (auto& q : fresh) q.y += (float)y0;
+            new_ids(fresh.size());
+            kept.insert(kept.end(), fresh.begin(), fresh.end());
+            previous_points_ = kept;
+            return;
+        }
         if (!usable) {
             detect(frame, previous_points_);
             return;
@@ -496,6 +524,7 @@ private:
     std::vector<long> ids_, next_ids_;
     bool has_next_ = false, next_ids_valid_ = false;
     long id_counter_ = 0;
+    int frame_index_ = 0, trace_kept_ = 0, strip_ = 0;
     std::deque<Frame> history_;
     std::mt19937 rng_;
 };
@@ -518,6 +547,11 @@ const cv::Mat& to_gray(const uint8_t* rgb) {
                 int* out = acc.data();
                 if (block == 4) {
                     for (int j = 0; j < w; j++, q += 12) out[j] += q[0] + q[3] + q[6] + q[9];
+                } else if (block == 8 && P_GRAY_ROWS_8 > 0) {  // block 8: P_GRAY_ROWS_8 of the 8 rows, every other column
+                    if (a % (8 / P_GRAY_ROWS_8) != 8 / P_GRAY_ROWS_8 / 2) continue;
+                    for (int j = 0; j < w; j++, q += 24) out[j] += 2 * (q[0] + q[6] + q[12] + q[18]);
+                } else if (block == 8) {
+                    for (int j = 0; j < w; j++, q += 24) out[j] += q[0] + q[3] + q[6] + q[9] + q[12] + q[15] + q[18] + q[21];
                 } else {
                     for (int j = 0; j < w; j++) {
                         int s = 0;
@@ -527,7 +561,33 @@ const cv::Mat& to_gray(const uint8_t* rgb) {
                 }
             }
             uint8_t* row = gray.ptr<uint8_t>(i);
-            for (int j = 0; j < w; j++) row[j] = (uint8_t)((acc[j] + shift_div / 2) / shift_div);
+            const int used = (block == 8 && P_GRAY_ROWS_8 > 0) ? 8 * P_GRAY_ROWS_8 : shift_div;
+            for (int j = 0; j < w; j++) row[j] = (uint8_t)((acc[j] + used / 2) / used);
+        }
+        return gray;
+    }
+    if (P_FAST_GRAY == -3 && (int)std::lround(1.0 / P_SCALE) == 4) {  // (R+G+B) block mean, 12 bytes per block row via SWAR
+        const int w = width / 4, h = height / 4;
+        gray.create(h, w, CV_8U);
+        std::vector<uint32_t> acc(w);
+        const uint64_t lo = 0x00FF00FF00FF00FFull;
+        for (int i = 0; i < h; i++) {
+            std::fill(acc.begin(), acc.end(), 0u);
+            for (int a = 0; a < 4; a++) {
+                const uint8_t* q = rgb + 3 * (size_t)(i * 4 + a) * width;
+                for (int j = 0; j < w; j++, q += 12) {
+                    uint64_t x;
+                    uint32_t y;
+                    std::memcpy(&x, q, 8);
+                    std::memcpy(&y, q + 8, 4);
+                    uint64_t pairs = (x & lo) + ((x >> 8) & lo);
+                    const uint32_t yl = (y & 0x00FF00FFu) + ((y >> 8) & 0x00FF00FFu);
+                    pairs += (uint64_t)(yl & 0xFFFFu) + ((uint64_t)(yl >> 16));
+                    acc[j] += (uint32_t)((pairs * 0x0001000100010001ull) >> 48);
+                }
+            }
+            uint8_t* row = gray.ptr<uint8_t>(i);
+            for (int j = 0; j < w; j++) row[j] = (uint8_t)((acc[j] + 24) / 48);
         }
         return gray;
     }
@@ -637,6 +697,12 @@ VIOBENCH_EXPORT(init) int32_t init(const char* json, uint32_t length) {
 VIOBENCH_EXPORT(step) int32_t step(double t, const uint8_t* frame, const double* imu, int32_t imu_count, double* out) {
     try {
         if (!estimator) return VIOBENCH_STATUS_ERROR;
+        if (P_PROBE == 1 || P_PROBE == 2) {  // measurement only: 1 = gray conversion alone, 2 = nothing
+            if (P_PROBE == 1) to_gray(frame);
+            std::fill(out, out + 13, 0.0);
+            out[6] = 1.0;
+            return VIOBENCH_STATUS_OK;
+        }
         estimator->step(t, to_gray(frame), imu, imu_count, out);
         return VIOBENCH_STATUS_OK;
     } catch (const std::exception& e) {

@@ -136,6 +136,34 @@ Record: `results/klt-bounded/nov14_study.json`.
   `solution.py`, off by default.
 - Next: the native C++ port of the e3/e5 estimator, to remove the 4.5 M/frame Python floor (`native/klt_bounded/`).
 
+## Update, November 15, 2026: C++ port, gyro bias from vision, low-fuel point
+
+Record: `results/klt-bounded/nov15_cpp.json` (43 C++ variants, public and held-out). Build a variant with
+`scripts/build_cpp_variant.sh <name> P_X=value ...` (copies `native/klt_bounded`, prepends the overrides to `params.h`),
+evaluate with `scripts/eval_cpp.sh <episodes> <parallel> <names...>`.
+
+| | Public ATE | Held-out ATE | Peak fuel |
+|---|---:|---:|---:|
+| Python `e5_p05_base3` | 0.471 m | 0.513 m | 19.8 M |
+| C++ e5 (`c0_e5`) | 0.466 m | 0.512 m | 5.8 M |
+| `n4_rf085_s3` (recommended main) | 0.405 m | 0.417 m | 3.0 M |
+| `k7_c16_rf07` (recommended low-fuel) | 0.524 m | 0.612 m | 1.2 M |
+
+Estimated server area for n4 + k7: +3.64% (public) / +3.39% (held-out numbers), against +0.96% for the Python pair.
+
+- Gyro bias from vision (`P_BIAS_BASELINE=30`, Python `bias_baseline_frames`): the rotation correction that best
+  explains tracks seen 30 frames apart moves the gyro bias (gain 0.02). True biases are 0.5-1.2 deg/s and the
+  start-of-episode calibration misses them when the drone starts moving. Main accuracy gain of the day.
+- Fuel: gray conversion dominated (2.4 M); a green-channel block mean (`P_FAST_GRAY=-1`) costs 0.7 M at 1/4 scale
+  and 0.11 M at 1/8 scale with 2 rows x 4 columns (`P_GRAY_ROWS_8=2`). Peak frames were full-image corner
+  detection on replenish (+1.4 M); `P_DETECT_STRIPS=3` bounds it but costs accuracy unless the replenish threshold
+  is high (0.85).
+- Oracle decomposition (host, b_B30_g0.02, public): true speed 0.410 -> 0.236 m, true direction -> 0.368, true
+  rotation -> 0.404, speed + direction -> 0.018. Speed is the remaining error.
+- Dead ends for speed: landmark triangulation (scale collapse; open-loop correlation with true speed 0.2-0.45),
+  turn-rate model (speed correlates -0.4 with |gyro| but using it hurt), accelerometer (tilt leakage still > true
+  acceleration with tilt correction). True drone tilt is about 0.5 deg: the flights are nearly level.
+
 ## Not completed or not known
 
 - No live-server comparison, submission, or measurement under the server's `/config` limits.

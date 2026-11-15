@@ -133,6 +133,10 @@ LM_NORMALIZE_TAU = PARAMS.get("lm_normalize_tau")
 LM_SHADOW = bool(PARAMS.get("lm_shadow", False))  # landmarks live on a constant-speed shadow trajectory (open loop)
 LM_BETA = float(PARAMS.get("lm_beta", 0.5))  # shadow: speed = speed_prior * (smoothed measurement / long-run mean) ** beta
 LM_TAU = float(PARAMS.get("lm_tau", 10.0))  # s: output speed_prior * (speed / its long-run geometric mean)  # outlier gate on per-point step estimates, in median abs deviations
+TURN_A = float(PARAMS.get("turn_a", 1.33))  # speed_model turn: speed_prior * clip(turn_a + turn_b * |w|, turn_clip)
+TURN_B = float(PARAMS.get("turn_b", -1.65))  # |w|: bias-corrected gyro magnitude (rad/s), averaged over turn_tau
+TURN_TAU = float(PARAMS.get("turn_tau", 1.0))
+TURN_CLIP = tuple(PARAMS.get("turn_clip", [0.3, 1.5]))
 PROBE = PARAMS.get("probe")  # measurement only: "imu_only" skips all vision work (fuel floor of the rest)
 
 
@@ -440,6 +444,11 @@ class Solution:
 
         R_wb_before = self.R_wb.copy()
         v_before = self.v.copy()
+        if SPEED_MODEL == "turn" and len(imu):
+            rate = float(np.linalg.norm(imu[:, 4:7] - self.gyro_bias, axis=1).mean())
+            span = max(imu[-1, 0] - imu[0, 0], 1e-3) * len(imu) / max(len(imu) - 1, 1)
+            a = min(span / TURN_TAU, 1.0)
+            self.turn_rate = rate if not hasattr(self, "turn_rate") else (1 - a) * self.turn_rate + a * rate
         displacement_imu = self._integrate_vectorized(imu) if IMU_VECTORIZED else self._integrate(imu)
         R_c1_c0 = (self.R_wb @ self.R_bc).T @ (R_wb_before @ self.R_bc)
         self.last_flow = None
@@ -478,6 +487,8 @@ class Solution:
                         self.flow_average = float(np.exp((1 - a) * np.log(self.flow_average) + a * np.log(rate)))
                     speed = SPEED_PRIOR * float(np.clip((rate / self.flow_average) ** SPEED_FLOW_ALPHA, *SPEED_FLOW_CLIP))
                     self.last_speed = speed
+                elif SPEED_MODEL == "turn":
+                    speed = self.last_speed = self._turn_speed()
                 elif SPEED_MODEL == "landmark":
                     speed = self.last_speed = self._landmark_speed(direction_world, displacement_imu, dt)
                 elif SPEED_MODEL == "metric":
@@ -522,6 +533,11 @@ class Solution:
                                  self.R_wb @ self.R_bc, self.last_t))
             del self.history[:-keep]
         return self._state()
+
+    def _turn_speed(self):
+        """Multirotor trajectories slow down in turns: relative speed falls linearly with the smoothed turn rate."""
+        rate = getattr(self, "turn_rate", 0.0)
+        return SPEED_PRIOR * float(np.clip(TURN_A + TURN_B * rate, *TURN_CLIP))
 
     def _world_bearings(self, points):
         """Unit bearings in world axes of pixel points in the current frame."""

@@ -76,3 +76,15 @@
 #ifndef P_BIAS_MAX_STEP_DPS
 #define P_BIAS_MAX_STEP_DPS 0.2
 #endif
+#ifndef P_PROBE
+#define P_PROBE 0  // measurement only (see step)
+#endif
+#ifndef P_TRACE
+#define P_TRACE 0  // 1: one stderr line per frame (diagnostics)
+#endif
+#ifndef P_DETECT_STRIPS
+#define P_DETECT_STRIPS 0  // 0: full-image corner detection; k: one of k horizontal strips per frame (bounded cost)
+#endif
+#ifndef P_GRAY_ROWS_8
+#define P_GRAY_ROWS_8 0  // scale 1/8 green conversion: 0 = all 64 pixels, k = k rows x 4 columns per block
+#endif
