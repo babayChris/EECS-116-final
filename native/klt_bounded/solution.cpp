@@ -4,6 +4,9 @@
 // Settings: params.h. Build: viobench bundle <this directory> -o klt_bounded.wasm
 #include "viobench_abi.h"
 #include "params.h"
+#if P_SPEED_MODEL
+#include "speed_model.h"
+#endif
 
 #include <opencv2/core.hpp>
 #include <opencv2/imgproc.hpp>
@@ -115,6 +118,7 @@ public:
 
     // One frame: gray image at the working scale and the IMU rows since the last frame. Writes the 13 output values.
     void step(double t, const cv::Mat& frame, const double* imu, int n, double* out) {
+        if (P_SPEED_MODEL) speed_push(imu, n);
         if (!initialized_) {
             for (int i = 0; i < n; i++) calibration_.emplace_back(imu + 7 * i, imu + 7 * i + 7);
             if (calibration_.size() < 2 || calibration_.back()[0] - calibration_.front()[0] < CALIBRATION_SECONDS) {
@@ -135,6 +139,7 @@ public:
         const bool have_direction = track(frame, R_c1_c0, direction_camera);
         double dt = 0.05;
         if (n) dt = std::max(imu[7 * (n - 1)] - imu[0] + (n > 1 ? imu[7] - imu[0] : 0.0), 1e-3);
+        const double speed = P_SPEED_MODEL ? learned_speed(t) : P_SPEED_PRIOR;
         if (have_direction) {
             Vec3 direction_world = (R_wb_before * R_bc_) * direction_camera;
             direction_world *= 1.0 / std::max(cv::norm(direction_world), 1e-12);
@@ -144,14 +149,14 @@ public:
             }
             last_direction_ = direction_world;
             has_last_direction_ = true;
-            const Vec3 displacement = P_SPEED_PRIOR * dt * direction_world;
+            const Vec3 displacement = speed * dt * direction_world;
             p_ += displacement - displacement_imu;
             v_ = displacement * (1.0 / dt);
         } else {
             p_ -= displacement_imu;
             if (has_last_direction_) {  // coast: keep the last velocity
-                p_ += P_SPEED_PRIOR * dt * last_direction_;
-                v_ = P_SPEED_PRIOR * last_direction_;
+                p_ += speed * dt * last_direction_;
+                v_ = speed * last_direction_;
             } else {
                 v_ = Vec3(0, 0, 0);
             }
@@ -171,6 +176,76 @@ public:
     void reseed() { rng_.seed(0); }
 
 private:
+#if P_SPEED_MODEL
+    // Learned IMU speed (speed_model.h): ridge regression on means and standard deviations of 9 IMU signals over
+    // causal windows of 0.25-4 s; gyro bias from the first second of samples.
+    // Running sums per window over a ring of the last samples: each new sample is added once per window and removed
+    // when it leaves the window, so a frame costs O(new samples x windows).
+    static constexpr int SPEED_RING = 1024;  // > 4.1 s at 200 Hz
+    struct SpeedSample { double t; double c[9]; };
+    void speed_push(const double* imu, int n) {
+        for (int i = 0; i < n; i++) {
+            const double* r = imu + 7 * i;
+            if (!speed_bias_ready_) {
+                if (r[0] < 1.0) {
+                    for (int k = 0; k < 3; k++) speed_bias_sum_[k] += r[4 + k];
+                    speed_bias_count_++;
+                } else {
+                    for (int k = 0; k < 3; k++) speed_bias_[k] = speed_bias_count_ ? speed_bias_sum_[k] / speed_bias_count_ : 0.0;
+                    speed_bias_ready_ = true;
+                }
+            }
+            const double gx = r[4] - speed_bias_[0], gy = r[5] - speed_bias_[1], gz = r[6] - speed_bias_[2];
+            SpeedSample& q = speed_ring_[speed_count_ % SPEED_RING];
+            q.t = r[0];
+            q.c[0] = std::abs(gx); q.c[1] = std::abs(gy); q.c[2] = std::abs(gz);
+            q.c[3] = std::sqrt(gx * gx + gy * gy + gz * gz);
+            q.c[4] = r[1]; q.c[5] = r[2]; q.c[6] = r[3];
+            q.c[7] = std::sqrt(r[1] * r[1] + r[2] * r[2] + r[3] * r[3]);
+            q.c[8] = r[1] * r[1] + r[2] * r[2];
+            for (int w = 0; w < SPEED_WINDOWS; w++)
+                for (int k = 0; k < 9; k++) { speed_sum_[w][k] += q.c[k]; speed_sq_[w][k] += q.c[k] * q.c[k]; }
+            speed_count_++;
+        }
+    }
+    void speed_drop(double t) {
+        for (int w = 0; w < SPEED_WINDOWS; w++) {
+            while (speed_start_[w] < speed_count_ && (speed_count_ - speed_start_[w] > SPEED_RING - 1 ||
+                                                      speed_ring_[speed_start_[w] % SPEED_RING].t <= t - SPEED_WINDOW_SECONDS[w])) {
+                const SpeedSample& q = speed_ring_[speed_start_[w] % SPEED_RING];
+                for (int k = 0; k < 9; k++) { speed_sum_[w][k] -= q.c[k]; speed_sq_[w][k] -= q.c[k] * q.c[k]; }
+                speed_start_[w]++;
+            }
+        }
+    }
+    double learned_speed(double t) {
+#if P_SPEED_MODEL == 2
+        const double* W = SPEED_W_ALL; const double B = SPEED_B_ALL, MEAN = SPEED_MEAN_ALL;
+#else
+        const double* W = SPEED_W_PUBLIC; const double B = SPEED_B_PUBLIC, MEAN = SPEED_MEAN_PUBLIC;
+#endif
+        speed_drop(t);
+        double prediction = B;
+        for (int w = 0; w < SPEED_WINDOWS; w++) {
+            const double m = (double)std::max(speed_count_ - speed_start_[w], 1L);
+            for (int k = 0; k < 9; k++) {
+                const double mean = speed_sum_[w][k] / m, var = std::max(speed_sq_[w][k] / m - mean * mean, 0.0);
+                prediction += W[18 * w + k] * mean + W[18 * w + 9 + k] * std::sqrt(var);
+            }
+        }
+        const double damped = std::max(MEAN + P_SPEED_SHRINK * (prediction - MEAN), 0.03);
+        return damped * (P_SPEED_PRIOR / MEAN);
+    }
+    SpeedSample speed_ring_[SPEED_RING];
+    double speed_sum_[SPEED_WINDOWS][9] = {}, speed_sq_[SPEED_WINDOWS][9] = {};
+    long speed_start_[SPEED_WINDOWS] = {}, speed_count_ = 0;
+    double speed_bias_sum_[3] = {0, 0, 0}, speed_bias_[3] = {0, 0, 0};
+    int speed_bias_count_ = 0;
+    bool speed_bias_ready_ = false;
+#else
+    void speed_push(const double*, int) {}
+    double learned_speed(double) { return P_SPEED_PRIOR; }
+#endif
     void initialize(double t) {
         const size_t m = calibration_.size();
         Vec3 mean_a(0, 0, 0), mean_g(0, 0, 0), var_a(0, 0, 0), var_g(0, 0, 0);
@@ -326,8 +401,18 @@ private:
         std::vector<uchar> status;
         std::vector<float> error;
         const cv::TermCriteria criteria(cv::TermCriteria::COUNT | cv::TermCriteria::EPS, P_LK_ITERS, P_LK_EPS);
+        int flags = 0;
+        if (P_LK_PREDICT) {  // start each track where the gyro rotation alone would move it
+            const double fx = K_(0, 0), fy = K_(1, 1), cx = K_(0, 2), cy = K_(1, 2);
+            tracked.resize(previous_points_.size());
+            for (size_t k = 0; k < previous_points_.size(); k++) {
+                const Vec3 r = R_c1_c0 * Vec3((previous_points_[k].x - cx) / fx, (previous_points_[k].y - cy) / fy, 1.0);
+                tracked[k] = r[2] > 1e-6 ? cv::Point2f((float)(fx * r[0] / r[2] + cx), (float)(fy * r[1] / r[2] + cy)) : previous_points_[k];
+            }
+            flags = cv::OPTFLOW_USE_INITIAL_FLOW;
+        }
         cv::calcOpticalFlowPyrLK(previous_frame_, frame, previous_points_, tracked, status, error, cv::Size(P_LK_WIN, P_LK_WIN),
-                                 P_LK_LEVELS, criteria);
+                                 P_LK_LEVELS, criteria, flags);
         const int n = (int)previous_points_.size();
         std::vector<bool> good(n);
         for (int k = 0; k < n; k++) good[k] = status[k] == 1;

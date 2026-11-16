@@ -6,7 +6,7 @@ cd "$(dirname "$0")/.."
 name=$1; shift
 source .venv-vio/bin/activate
 dir=work/cpp/$name; rm -rf "$dir"; mkdir -p "$dir"
-cp native/klt_bounded/solution.cpp native/klt_bounded/CMakeLists.txt "$dir/"
+cp native/klt_bounded/solution.cpp native/klt_bounded/speed_model.h native/klt_bounded/CMakeLists.txt "$dir/"
 { for kv in "$@"; do echo "#define ${kv%%=*} ${kv#*=}"; done; cat native/klt_bounded/params.h; } > "$dir/params.h"
 sed -i "s|\${CMAKE_CURRENT_SOURCE_DIR}/../../viobench|$PWD/viobench|" "$dir/CMakeLists.txt"
 viobench bundle "$dir" -o "work/cpp/$name.wasm" > "work/cpp/$name.bundle.log" 2>&1 || { echo "$name: build failed"; exit 1; }

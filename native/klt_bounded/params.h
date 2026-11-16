@@ -28,6 +28,9 @@
 #ifndef P_LK_EPS
 #define P_LK_EPS 0.03
 #endif
+#ifndef P_LK_PREDICT
+#define P_LK_PREDICT 0  // 1: start LK at the gyro-predicted position
+#endif
 #ifndef P_LK_FB_PX
 #define P_LK_FB_PX 0.0  // 0: no forward-backward check
 #endif
@@ -48,6 +51,12 @@
 #endif
 #ifndef P_MIN_DEROTATED_PARALLAX
 #define P_MIN_DEROTATED_PARALLAX 0.25
+#endif
+#ifndef P_SPEED_MODEL
+#define P_SPEED_MODEL 0  // 1: learned IMU speed, weights fit on public episodes; 2: fit on public + held-out
+#endif
+#ifndef P_SPEED_SHRINK
+#define P_SPEED_SHRINK 0.6  // damping of the learned speed toward its mean
 #endif
 #ifndef P_SPEED_PRIOR
 #define P_SPEED_PRIOR 0.5
