@@ -18,6 +18,7 @@ for name in "${names[@]}"; do
   dir="work/variants/$name"; rm -rf "$dir"; mkdir -p "$dir"
   cp solutions/klt_bounded/solution.py "$dir/"
   python -c "import json,sys;json.dump(json.load(open('solutions/klt_bounded/variants.json'))[sys.argv[1]],open(sys.argv[2],'w'))" "$name" "$dir/params.json"
+  if grep -q '"speed_model": "learned"' "$dir/params.json"; then cp solutions/klt_bounded/speed_model.json "$dir/"; fi
   viobench bundle "$dir" -o "work/variants/$name.wasm" --runtime "$runtime" > "work/variants/$name.bundle.log" 2>&1
   viobench check "work/variants/$name.wasm" > "work/variants/$name.check.log" 2>&1 || { echo "$name: check failed (work/variants/$name.check.log)"; }
 done

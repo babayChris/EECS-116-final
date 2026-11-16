@@ -103,6 +103,17 @@ RNG_SEED = int(PARAMS.get("rng_seed", 0))
 LK_FB_PX = PARAMS.get("lk_fb_px")
 BASELINE_FRAMES = int(PARAMS.get("baseline_frames", 1))
 PROBE = PARAMS.get("probe")  # measurement only: "imu_only" skips all vision work (fuel floor of the rest)
+SPEED_FEATURES = bool(PARAMS.get("speed_features", False)) or SPEED_MODEL == "learned"
+SPEED_MODEL_SPEC = None
+if SPEED_MODEL == "learned":  # weights written by scripts/speed_fit.py --export, bundled next to this file
+    SPEED_MODEL_SPEC = json.loads(_bundle.read_text("speed_model.json"))
+    for _key in ("mean", "std", "weights"):
+        SPEED_MODEL_SPEC[_key] = np.asarray(SPEED_MODEL_SPEC[_key], dtype=float)
+SPEED_EMA_TAUS = (0.5, 2.0)  # seconds; running averages of the speed features
+SPEED_EMA_KEYS = ("flow_med", "flow_p75", "gyro_norm", "acc_x", "acc_y", "acc_z", "acc_std")
+SPEED_FEATURE_NAMES = (("has_flow", "flow_med", "flow_p25", "flow_p75", "track_fraction", "has_direction", "gyro_norm",
+                        "acc_x", "acc_y", "acc_z", "acc_norm_minus_g", "acc_std", "gyro_std")
+                       + tuple(f"ema{tau}_{key}" for tau in SPEED_EMA_TAUS for key in SPEED_EMA_KEYS))
 
 
 def matrix_to_quaternion(R):
@@ -151,6 +162,12 @@ class Solution:
         self.ids = None  # identity of each entry of previous_points
         self.id_counter = 0
         self.history = []  # (ids, points, R_wc) of recent frames, for baseline_frames > 1
+        self.flow_magnitudes = None  # derotated image motion per track of this frame's one-frame solve (normalised units)
+        self.flow_tracks = 0
+        self.speed_ema = {}  # (tau, key) -> running average
+        self.speed_features = None  # this frame's feature vector (SPEED_FEATURE_NAMES), when SPEED_FEATURES
+        if SPEED_MODEL == "learned":
+            self.last_speed = SPEED_MODEL_SPEC["train_mean_speed"]
         if warm:
             self._warmup(config)
 
@@ -274,8 +291,11 @@ class Solution:
         x1 = np.column_stack([(p1[:, 0] - cx) / fx, (p1[:, 1] - cy) / fy, np.ones(n)])
         r0 = x0 @ R.T  # R x0: bearings of camera 0 expressed in camera 1 axes
         derotated = r0[:, :2] / r0[:, 2:3] - x1[:, :2]
-        flow = float(np.median(np.sqrt((derotated * derotated).sum(axis=1))))
+        magnitudes = np.sqrt((derotated * derotated).sum(axis=1))
+        flow = float(np.median(magnitudes))
         self.last_flow = flow
+        if self.flow_magnitudes is None:  # keep the one-frame solve; the multi-frame solve runs after it
+            self.flow_magnitudes = magnitudes
         if flow * fx < MIN_DEROTATED_PARALLAX * SCALE:
             return None  # no translation visible: pure rotation or a distant scene
         A = np.cross(r0, x1)  # A t = x1 . (t x R x0): zero for the true direction
@@ -330,6 +350,7 @@ class Solution:
             self.next_ids = self.ids[inside] if self.ids is not None and len(self.ids) == len(good) else None
         p0 = self.previous_points[good].reshape(-1, 2)
         p1 = tracked[good].reshape(-1, 2)
+        self.flow_tracks = len(p0)
         if len(p0) < MIN_TRACKS:
             return None
         if DIRECTION == "known_rotation":
@@ -404,8 +425,13 @@ class Solution:
         displacement_imu = self._integrate_vectorized(imu) if IMU_VECTORIZED else self._integrate(imu)
         R_c1_c0 = (self.R_wb @ self.R_bc).T @ (R_wb_before @ self.R_bc)
         self.last_flow = None
+        self.flow_magnitudes, self.flow_tracks = None, 0
         direction_camera = None if PROBE == "imu_only" else self._track(frame, R_c1_c0)
         dt = max(imu[-1, 0] - imu[0, 0] + (imu[1, 0] - imu[0, 0] if len(imu) > 1 else 0.0), 1e-3) if len(imu) else 0.05
+        if SPEED_FEATURES:
+            self.speed_features = self._speed_features(imu, dt, direction_camera is not None)
+            if SPEED_MODEL == "learned":
+                self.last_speed = self._learned_speed(self.speed_features)  # also used while coasting
         if direction_camera is not None:
             R_wc_previous = R_wb_before @ self.R_bc
             direction_world = R_wc_previous @ direction_camera
@@ -424,7 +450,7 @@ class Solution:
                     norm = np.linalg.norm(blended)
                     direction_world = blended / norm if norm > 1e-9 else direction_world
                 self.last_direction = direction_world
-                speed = SPEED_PRIOR
+                speed = self.last_speed if SPEED_MODEL == "learned" else SPEED_PRIOR
                 if SPEED_MODEL == "flow" and self.last_flow is not None and self.last_flow > 0:
                     rate = self.last_flow / dt
                     if self.flow_average is None:
@@ -464,6 +490,61 @@ class Solution:
                                  self.R_wb @ self.R_bc))
             del self.history[:-BASELINE_FRAMES]
         return self._state()
+
+    def _speed_features(self, imu, dt, has_direction):
+        """Causal per-frame inputs of the learned speed model, in SPEED_FEATURE_NAMES order.
+
+        Vision: derotated image motion of this frame's tracks as an angular rate (normalised image units per second;
+        roughly speed / depth). IMU: specific force in IMU axes (on a multirotor its x/y part is mostly rotor drag,
+        which grows with body-frame velocity), its fluctuation, and the gyro rate. Running averages smooth both
+        over SPEED_EMA_TAUS; the flow averages only update on frames that have a flow measurement."""
+        m = self.flow_magnitudes
+        has_flow = m is not None and len(m) > 0
+        if has_flow:
+            flow_med, flow_p25, flow_p75 = (float(v) / dt for v in np.percentile(m, (50, 25, 75)))
+        else:
+            flow_med = flow_p25 = flow_p75 = 0.0
+        if len(imu):
+            acc, gyro = imu[:, 1:4], imu[:, 4:7] - self.gyro_bias
+            acc_norm = np.sqrt((acc * acc).sum(axis=1))
+            gyro_norm_samples = np.sqrt((gyro * gyro).sum(axis=1))
+            acc_mean = acc.mean(axis=0)
+            acc_std, acc_norm_mean = float(acc_norm.std()), float(acc_norm.mean())
+            gyro_norm, gyro_std = float(gyro_norm_samples.mean()), float(gyro_norm_samples.std())
+        else:
+            acc_mean, acc_std, acc_norm_mean, gyro_norm, gyro_std = np.array([0.0, 0.0, GRAVITY]), 0.0, GRAVITY, 0.0, 0.0
+        current = {"flow_med": flow_med, "flow_p75": flow_p75, "gyro_norm": gyro_norm, "acc_x": float(acc_mean[0]),
+                   "acc_y": float(acc_mean[1]), "acc_z": float(acc_mean[2]), "acc_std": acc_std}
+        averages = []
+        for tau in SPEED_EMA_TAUS:
+            a = min(dt / tau, 1.0)
+            for key in SPEED_EMA_KEYS:
+                if key.startswith("flow") and not has_flow:
+                    value = self.speed_ema.get((tau, key), 0.0)
+                else:
+                    previous = self.speed_ema.get((tau, key))
+                    value = current[key] if previous is None else previous + a * (current[key] - previous)
+                self.speed_ema[(tau, key)] = value
+                averages.append(value)
+        return np.array([float(has_flow), flow_med, flow_p25, flow_p75, self.flow_tracks / MAX_CORNERS, float(has_direction),
+                         gyro_norm, current["acc_x"], current["acc_y"], current["acc_z"], acc_norm_mean - GRAVITY, acc_std,
+                         gyro_std] + averages)
+
+    def _learned_speed(self, features):
+        """speed_model "learned": speed (m/s) from a linear model on the speed features, as exported to speed_model.json
+        by scripts/speed_fit.py --export. Each model input is a logged feature, the log of one (plus log_eps) or the
+        hypotenuse of two; the prediction is clipped at zero and shrunk toward the training mean speed."""
+        m = SPEED_MODEL_SPEC
+        x = np.empty(len(m["columns"]))
+        for c, (op, i, j) in enumerate(m["columns"]):
+            if op == "raw":
+                x[c] = features[i]
+            elif op == "log":
+                x[c] = np.log(features[i] + m["log_eps"])
+            else:  # "hypot"
+                x[c] = np.hypot(features[i], features[j])
+        q = max(float(((x - m["mean"]) / m["std"]) @ m["weights"] + m["intercept"]), 0.0)
+        return m["shrink"] * q + (1.0 - m["shrink"]) * m["train_mean_speed"]
 
     def _direction_multiframe(self):
         """World direction of motion from the frame baseline_frames ago to now, using tracks seen in both."""

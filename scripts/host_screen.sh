@@ -12,6 +12,7 @@ for name in "$@"; do
   d="work/hosttest/$name"; rm -rf "$d"; mkdir -p "$d"
   cp solutions/klt_bounded/solution.py "$d/"
   python -c "import json,sys;json.dump(json.load(open('solutions/klt_bounded/variants.json'))[sys.argv[1]],open(sys.argv[2],'w'))" "$name" "$d/params.json"
+  if grep -q '"speed_model": "learned"' "$d/params.json"; then cp solutions/klt_bounded/speed_model.json "$d/"; fi
 done
 tag=${HOST_TAG:-public}
 if [ -n "${HOST_EPISODES:-}" ]; then select="$HOST_EPISODES"; else select="--max-episodes $episodes"; fi

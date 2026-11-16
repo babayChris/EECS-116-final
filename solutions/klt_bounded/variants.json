@@ -1904,5 +1904,32 @@
   "replenish_fraction": 0.5,
   "lk_fb_px": 1.0,
   "baseline_frames": 3
+ },
+ "_comment_learned": "Learned speed (victor/learned-speed): w_s0500_c40 with speed_model learned; weights in speed_model.json from scripts/speed_fit.py --export (trained on the 10 public episodes, shrink 0.5).",
+ "l1_s05_learned": {
+  "scale": 0.5,
+  "max_corners": 40,
+  "min_distance": 6,
+  "block_size": 5,
+  "lk_win": 9,
+  "lk_levels": 2,
+  "e_max_points": 40,
+  "e_max_iters": 8,
+  "min_tracks": 20,
+  "min_inliers": 10,
+  "warmup": true,
+  "lk_iters": 10,
+  "lk_eps": 0.03,
+  "e_prob": 0.99,
+  "direction": "known_rotation",
+  "imu_vectorized": true,
+  "fusion": "constant_speed",
+  "min_derotated_parallax_px": 0.25,
+  "no_vision": "coast",
+  "track_mode": "persist",
+  "replenish_fraction": 0.5,
+  "lk_fb_px": 1.0,
+  "baseline_frames": 3,
+  "speed_model": "learned"
  }
 }
