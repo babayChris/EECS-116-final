@@ -1,0 +1,110 @@
+{
+ "recorded": "2026-11-15",
+ "source": "course server submission pages, pasted by the user",
+ "submissions": [
+  {
+   "id": "611191c38f54861f",
+   "submitted": "2026-11-14T23:06:08-08:00",
+   "label": "klt-bounded e5 3-frame baseline"
+  },
+  {
+   "id": "41926ef1f87ba2c8",
+   "submitted": "2026-11-14T23:27:09-08:00",
+   "label": null,
+   "note": "same file uploaded again"
+  }
+ ],
+ "file": "viobench_e5_3frame_baseline.wasm",
+ "wasm_sha256": "ee1e10bea4a66bd2410aa3f92e819e4327c63a3fc3caa470195c6d741ec91fb8",
+ "summary": {
+  "mean_sim3_ate_m": 0.553,
+  "max_fuel_per_frame": 20100000.0,
+  "fuel_p95": 19100000.0,
+  "claimed_area_pct": 0.445,
+  "first10_public_mean": 0.4706,
+  "other10_mean": 0.6357
+ },
+ "per_episode": {
+  "0386e5c941b5": {
+   "sim3_ate_m": 0.369,
+   "max_fuel_M": 19.4
+  },
+  "9b6a92791e46": {
+   "sim3_ate_m": 0.771,
+   "max_fuel_M": 19.6
+  },
+  "6e8e3766f462": {
+   "sim3_ate_m": 0.85,
+   "max_fuel_M": 19.8
+  },
+  "f8fb89fff0c3": {
+   "sim3_ate_m": 0.208,
+   "max_fuel_M": 19.7
+  },
+  "489ad518363d": {
+   "sim3_ate_m": 0.424,
+   "max_fuel_M": 19.5
+  },
+  "51ea6311a50f": {
+   "sim3_ate_m": 0.386,
+   "max_fuel_M": 19.6
+  },
+  "60ed4323f3aa": {
+   "sim3_ate_m": 0.376,
+   "max_fuel_M": 19.6
+  },
+  "8fff5c8dc637": {
+   "sim3_ate_m": 0.451,
+   "max_fuel_M": 19.6
+  },
+  "41e11443a9a5": {
+   "sim3_ate_m": 0.466,
+   "max_fuel_M": 19.6
+  },
+  "8321da1faa30": {
+   "sim3_ate_m": 0.405,
+   "max_fuel_M": 19.5
+  },
+  "53b9f0801513": {
+   "sim3_ate_m": 1.27,
+   "max_fuel_M": 19.4
+  },
+  "bc763bd0d916": {
+   "sim3_ate_m": 0.334,
+   "max_fuel_M": 19.7
+  },
+  "43623345d941": {
+   "sim3_ate_m": 0.763,
+   "max_fuel_M": 19.4
+  },
+  "16ec056c8c44": {
+   "sim3_ate_m": 0.481,
+   "max_fuel_M": 20.1
+  },
+  "5404da24acbf": {
+   "sim3_ate_m": 0.691,
+   "max_fuel_M": 19.6
+  },
+  "47585ad5fed4": {
+   "sim3_ate_m": 0.458,
+   "max_fuel_M": 19.9
+  },
+  "966666ab12d9": {
+   "sim3_ate_m": 0.55,
+   "max_fuel_M": 19.4
+  },
+  "5e71688fa1fe": {
+   "sim3_ate_m": 1.04,
+   "max_fuel_M": 19.4
+  },
+  "84f5043f2572": {
+   "sim3_ate_m": 0.456,
+   "max_fuel_M": 19.5
+  },
+  "1b38f5e9c6a8": {
+   "sim3_ate_m": 0.314,
+   "max_fuel_M": 19.6
+  }
+ },
+ "note": "First 10 episodes are our 10 public episodes; ATE matches local sandbox (summary.json e5_p05_base3) to 3 decimals. Other 10 are not available locally."
+}

@@ -1,0 +1,174 @@
+{
+ "recorded": "2026-11-15",
+ "note": "Literature follow-ups. Host = Python mirror (b_B30_g0.02 base 0.410 public). Sandbox = C++ WASM, default limits. n4 base overrides plus listed changes.",
+ "stop_detection_host_public": {
+  "base": 0.41,
+  "hard_0.3px": 0.412,
+  "hard_0.5px": 0.414,
+  "hard_0.8px": 0.47,
+  "soft_0.5px": 0.407,
+  "soft_1.0px": 0.416,
+  "hard_0.5px_2consec": 0.406,
+  "diagnostic": "derotated flow <0.5 px flags 4.7% of frames, precision 0.65, recall 0.22 for true speed <0.08 m/s; accel std and accel magnitude uncorrelated with speed; gyro rate corr -0.39"
+ },
+ "lk_predict_sandbox": {
+  "g1_n4p": {
+   "public": {
+    "sim3_ate_mean_m": 0.4507,
+    "fuel_per_frame_max": 2959155
+   }
+  },
+  "g2_n4p_w5": {
+   "public": {
+    "sim3_ate_mean_m": 0.3998,
+    "fuel_per_frame_max": 2563139
+   }
+  },
+  "g3_n4p_it5": {
+   "public": {
+    "sim3_ate_mean_m": 0.4515,
+    "fuel_per_frame_max": 2854631
+   }
+  },
+  "g4_n4p_w5it5": {
+   "public": {
+    "sim3_ate_mean_m": 0.4013,
+    "fuel_per_frame_max": 2477739
+   },
+   "heldout": {
+    "sim3_ate_mean_m": 0.39,
+    "fuel_per_frame_max": 2445017
+   }
+  },
+  "g5_k7p": {
+   "public": {
+    "sim3_ate_mean_m": 0.5493,
+    "fuel_per_frame_max": 1176651
+   }
+  },
+  "g6_k7p_w3": {
+   "public": {
+    "sim3_ate_mean_m": 0.6442,
+    "fuel_per_frame_max": 960061
+   }
+  },
+  "g7_k7p_it5": {
+   "public": {
+    "sim3_ate_mean_m": 0.5787,
+    "fuel_per_frame_max": 1119682
+   }
+  },
+  "g8_n4_w5": {
+   "public": {
+    "sim3_ate_mean_m": 0.4347,
+    "fuel_per_frame_max": 2576054
+   },
+   "heldout": {
+    "sim3_ate_mean_m": 0.4249,
+    "fuel_per_frame_max": 2613393
+   }
+  },
+  "g9_n4_w5it5": {
+   "public": {
+    "sim3_ate_mean_m": 0.3947,
+    "fuel_per_frame_max": 2512614
+   },
+   "heldout": {
+    "sim3_ate_mean_m": 0.4383,
+    "fuel_per_frame_max": 2498651
+   }
+  },
+  "g10_n4p_w4it5": {
+   "public": {
+    "sim3_ate_mean_m": 0.4377,
+    "fuel_per_frame_max": 2335733
+   }
+  }
+ },
+ "learned_speed": {
+  "model": "ridge (lambda 10) on mean and std of 9 IMU signals over causal 0.25/0.5/1/2/4 s windows, damped 0.6 toward the mean; native/klt_bounded/speed_model.h; P_SPEED_MODEL=1 public weights, 2 public+held-out weights",
+  "speed_regression": {
+   "constant_rel_err": 0.482,
+   "loo_public_rel_err": 0.402,
+   "loo_public_corr": 0.44,
+   "heldout_corr_public_weights": 0.519
+  },
+  "host_public_loo": {
+   "base": 0.41,
+   "shrink_0.3": 0.3865,
+   "shrink_0.5": 0.379,
+   "shrink_0.7": 0.378,
+   "shrink_1.0": 0.387,
+   "shrink_1.5": 0.426
+  },
+  "host_heldout_public_weights": {
+   "base": 0.456,
+   "learned_shrink_0.6": 0.406
+  },
+  "imu_only_simulation": "HyperDrone without rendering did not finish one 10 s x4 flight batch in 15 min on CPU; not used",
+  "sandbox": {
+   "s1_g4_sp": {
+    "public": {
+     "sim3_ate_mean_m": 0.3562,
+     "fuel_per_frame_max": 2698565
+    },
+    "heldout": {
+     "sim3_ate_mean_m": 0.3541,
+     "fuel_per_frame_max": 2662967
+    }
+   },
+   "s2_g4_sp04": {
+    "public": {
+     "sim3_ate_mean_m": 0.3646,
+     "fuel_per_frame_max": 2698565
+    },
+    "heldout": {
+     "sim3_ate_mean_m": 0.3595,
+     "fuel_per_frame_max": 2662967
+    }
+   },
+   "s3_k7_sp": {
+    "public": {
+     "sim3_ate_mean_m": 0.4946,
+     "fuel_per_frame_max": 1429519
+    },
+    "heldout": {
+     "sim3_ate_mean_m": 0.5826,
+     "fuel_per_frame_max": 1497031
+    }
+   },
+   "r1_g4_sp": {
+    "public": {
+     "sim3_ate_mean_m": 0.3562,
+     "fuel_per_frame_max": 2492507
+    },
+    "heldout": {
+     "sim3_ate_mean_m": 0.3541,
+     "fuel_per_frame_max": 2460850
+    }
+   },
+   "r3_k7_sp": {
+    "public": {
+     "sim3_ate_mean_m": 0.4946,
+     "fuel_per_frame_max": 1221738
+    },
+    "heldout": {
+     "sim3_ate_mean_m": 0.5826,
+     "fuel_per_frame_max": 1293124
+    }
+   },
+   "r4_g4_spall": {
+    "public": {
+     "sim3_ate_mean_m": 0.3601,
+     "fuel_per_frame_max": 2492507
+    }
+   },
+   "r5_k7_spall": {
+    "public": {
+     "sim3_ate_mean_m": 0.4972,
+     "fuel_per_frame_max": 1221738
+    }
+   }
+  }
+ }
+}
