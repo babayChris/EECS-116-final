@@ -5,8 +5,8 @@
  "upstream_commit": "17303aa14ba14e16cb54d9291d684371e1d3b548",
  "build": "bash scripts/build_stage2.sh sweep",
  "submission_candidates": [
-  "r5_p0.42",
-  "r4m"
+  "r4_clamp (submitted)",
+  "r5_p0.42 (submitted)"
  ],
  "variants": {
   "r4": {
@@ -480,6 +480,213 @@
     0.6904
    ],
    "wasm_sha256": "394ccc793260310efcd52940b19d69b383f75d4d81a5d3d5a7a6efa7f701f412"
+  },
+  "r4_clamp": {
+   "overrides": [
+    "P_BIAS_BASELINE 30",
+    "P_FAST_GRAY -1",
+    "P_MIN_TRACKS 12",
+    "P_MIN_INLIERS 8",
+    "P_MAX_CORNERS 20",
+    "P_E_MAX_POINTS 16",
+    "P_KR_HYPOTHESES 8",
+    "P_REPLENISH_FRACTION 0.85",
+    "P_DETECT_STRIPS 3",
+    "P_LK_PREDICT 1",
+    "P_LK_WIN 5",
+    "P_LK_ITERS 5",
+    "P_SPEED_MODEL 1",
+    "P_SPEED_PRIOR 0.75",
+    "P_SPEED_MODE 1"
+   ],
+   "wasm_sha256": "e998bc111c517ab9e8bf7beac9bbbeeff1bf69da0abdb47a26ef7f06903aac55"
+  },
+  "r4_rel": {
+   "overrides": [
+    "P_BIAS_BASELINE 30",
+    "P_FAST_GRAY -1",
+    "P_MIN_TRACKS 12",
+    "P_MIN_INLIERS 8",
+    "P_MAX_CORNERS 20",
+    "P_E_MAX_POINTS 16",
+    "P_KR_HYPOTHESES 8",
+    "P_REPLENISH_FRACTION 0.85",
+    "P_DETECT_STRIPS 3",
+    "P_LK_PREDICT 1",
+    "P_LK_WIN 5",
+    "P_LK_ITERS 5",
+    "P_SPEED_MODEL 1",
+    "P_SPEED_PRIOR 0.75",
+    "P_SPEED_MODE 2"
+   ],
+   "wasm_sha256": "110ec2ec74ff56a0b25ca108d3378cfe2cf670c7fe8429f0364412fa6df5a7c3"
+  },
+  "r4_clamp_p03": {
+   "overrides": [
+    "P_BIAS_BASELINE 30",
+    "P_FAST_GRAY -1",
+    "P_MIN_TRACKS 12",
+    "P_MIN_INLIERS 8",
+    "P_MAX_CORNERS 20",
+    "P_E_MAX_POINTS 16",
+    "P_KR_HYPOTHESES 8",
+    "P_REPLENISH_FRACTION 0.85",
+    "P_DETECT_STRIPS 3",
+    "P_LK_PREDICT 1",
+    "P_LK_WIN 5",
+    "P_LK_ITERS 5",
+    "P_SPEED_MODEL 1",
+    "P_SPEED_PRIOR 0.3246063005",
+    "P_SPEED_MODE 1"
+   ],
+   "wasm_sha256": "8e10c63191e9b064a590fcba98b368a1bb1fd354f3c381a7e4ad72529a5965a8",
+   "ate_mean_m": 1.0222,
+   "sim3_ate_mean_m": 0.3566,
+   "fuel_per_frame_max": 2493049
+  },
+  "r4_rel_p03": {
+   "overrides": [
+    "P_BIAS_BASELINE 30",
+    "P_FAST_GRAY -1",
+    "P_MIN_TRACKS 12",
+    "P_MIN_INLIERS 8",
+    "P_MAX_CORNERS 20",
+    "P_E_MAX_POINTS 16",
+    "P_KR_HYPOTHESES 8",
+    "P_REPLENISH_FRACTION 0.85",
+    "P_DETECT_STRIPS 3",
+    "P_LK_PREDICT 1",
+    "P_LK_WIN 5",
+    "P_LK_ITERS 5",
+    "P_SPEED_MODEL 1",
+    "P_SPEED_PRIOR 0.3246063005",
+    "P_SPEED_MODE 2"
+   ],
+   "wasm_sha256": "4151b757ecb42b73be3a20f69911d1ba87f9e3a184b63834914bbafc4d0ffc65",
+   "ate_mean_m": 1.5754,
+   "sim3_ate_mean_m": 0.4928,
+   "fuel_per_frame_max": 2493089
+  },
+  "c4_p0.5": {
+   "overrides": [
+    "P_BIAS_BASELINE 30"
+   ],
+   "wasm_sha256": "8e84a3c4253fa4d3e170db694653e11eba38605a95f14d6f0f42200198d2254b",
+   "ate_mean_m": 2.2745,
+   "sim3_ate_mean_m": 0.4013,
+   "fuel_per_frame_max": 2477739
+  },
+  "c7_p0.5": {
+   "overrides": [
+    "P_SCALE 0.125",
+    "P_FAST_GRAY -1"
+   ],
+   "wasm_sha256": "e9bfce86c8af49235e338a224c5e2bf1d77fa4264c3c177854d8652893af1805",
+   "ate_mean_m": 1.3358,
+   "sim3_ate_mean_m": 0.5243,
+   "fuel_per_frame_max": 1209149
   }
+ },
+ "agile_proxy": {
+  "note": "4 simulated 10 s episodes (ProcTHOR-Train-1, seeds 8801-8804) with a more agile autopilot: scripts/agile_autopilot_proxy.patch applied to the pinned viobench simulator template (cruise 0.8-1.6 m/s, max acceleration 2.5 m/s^2, jerk 8, yaw rate 2.0). True mean speed 0.31-0.48 m/s. A guess at the stage 2 change, not the real generator; it reproduced the server's order (e5 better than r5) but not the size of the gap.",
+  "results": {
+   "e5": {
+    "ate_mean_m": 0.629,
+    "sim3_ate_mean_m": 0.306,
+    "velocity_rmse": 0.406,
+    "fuel_per_frame_max": 19871163
+   },
+   "r5_p0.42": {
+    "ate_mean_m": 0.817,
+    "sim3_ate_mean_m": 0.245,
+    "velocity_rmse": 0.397,
+    "fuel_per_frame_max": 1185451
+   },
+   "c4_p0.5": {
+    "ate_mean_m": 0.726,
+    "sim3_ate_mean_m": 0.325,
+    "velocity_rmse": 0.413,
+    "fuel_per_frame_max": 2473876
+   },
+   "c4_p0.75": {
+    "ate_mean_m": 0.766,
+    "sim3_ate_mean_m": 0.325,
+    "velocity_rmse": 0.535,
+    "fuel_per_frame_max": 2473876
+   },
+   "c4_p1.0": {
+    "ate_mean_m": 1.206,
+    "sim3_ate_mean_m": 0.325,
+    "velocity_rmse": 0.72,
+    "fuel_per_frame_max": 2473873
+   },
+   "c4_p1.25": {
+    "ate_mean_m": 1.775,
+    "sim3_ate_mean_m": 0.325,
+    "velocity_rmse": 0.932,
+    "fuel_per_frame_max": 2473876
+   },
+   "c7_p0.75": {
+    "ate_mean_m": 0.667,
+    "sim3_ate_mean_m": 0.279,
+    "velocity_rmse": 0.614,
+    "fuel_per_frame_max": 1172097
+   },
+   "c7_p1.0": {
+    "ate_mean_m": 0.818,
+    "sim3_ate_mean_m": 0.279,
+    "velocity_rmse": 0.801,
+    "fuel_per_frame_max": 1172094
+   },
+   "r4m": {
+    "ate_mean_m": 0.867,
+    "sim3_ate_mean_m": 0.247,
+    "velocity_rmse": 0.336,
+    "fuel_per_frame_max": 2489009
+   },
+   "r4_clamp": {
+    "ate_mean_m": 0.579,
+    "sim3_ate_mean_m": 0.242,
+    "velocity_rmse": 0.433,
+    "fuel_per_frame_max": 2489025
+   },
+   "r4_rel": {
+    "ate_mean_m": 1.407,
+    "sim3_ate_mean_m": 0.297,
+    "velocity_rmse": 0.736,
+    "fuel_per_frame_max": 2489065
+   }
+  }
+ },
+ "server_stage2": {
+  "note": "Server, private_stage2 (12 episodes), Nov 22 2026, as reported on the submission pages.",
+  "e5_p05_base3 (Python, submitted Nov 14)": {
+   "ate_mean_m": 3.5,
+   "sim3_ate_mean_m": 1.54,
+   "velocity_rmse": 0.871,
+   "fuel_per_frame_max_M": 20.1
+  },
+  "r5_p0.42": {
+   "ate_mean_m": 6.96,
+   "sim3_ate_mean_m": 2.19,
+   "velocity_rmse": 1.87,
+   "fuel_per_frame_max_M": 1.3
+  },
+  "r4_clamp": {
+   "ate_mean_m": 4.13,
+   "sim3_ate_mean_m": 1.9,
+   "velocity_rmse": 0.803,
+   "fuel_per_frame_max_M": 2.6
+  },
+  "christopher eskf_e6_bg05": {
+   "ate_mean_m": 5.8,
+   "sim3_ate_mean_m": 2.14,
+   "velocity_rmse": 2.34,
+   "fuel_per_frame_max_M": 1.3
+  },
+  "observations": [
+   "Episode 726458d9bc31 has 1-s rotation RPE about 0.69-0.71 rad for every submission (others about 0.03): likely a data property such as gyro saturation.",
+   "r4_clamp has the lowest velocity error but worse Sim(3) shape than e5; its fuel trims (20 corners, 5 px LK window, 5 iterations, strip detection) were tuned on gentle flights."
+  ]
  }
 }

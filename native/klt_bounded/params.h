@@ -61,6 +61,18 @@
 #ifndef P_SPEED_PRIOR
 #define P_SPEED_PRIOR 0.5
 #endif
+#ifndef P_SPEED_MODE
+#define P_SPEED_MODE 0  // learned speed: 0 rescaled to P_SPEED_PRIOR; 1 clamped ratio to the training mean; 2 ratio to its running mean
+#endif
+#ifndef P_SPEED_LO
+#define P_SPEED_LO 0.5
+#endif
+#ifndef P_SPEED_HI
+#define P_SPEED_HI 1.5
+#endif
+#ifndef P_SPEED_EMA_TAU
+#define P_SPEED_EMA_TAU 10.0
+#endif
 #ifndef P_REPLENISH_FRACTION
 #define P_REPLENISH_FRACTION 0.5
 #endif

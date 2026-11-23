@@ -190,6 +190,27 @@ Sim(3) ATE is only a diagnostic now, so the step length must be in metres. Recor
 - `victor/learned-speed` (Python flow + IMU speed, 26 M fuel) is superseded by the IMU-only C++ model; kept as the
   record of the flow and track-depth negative results.
 
+### Stage 2 server results and the agile proxy (late Nov 22)
+
+| Server, private_stage2 | Mean ATE | Sim(3) | Velocity RMSE | Peak fuel |
+|---|---:|---:|---:|---:|
+| `e5_p05_base3` (Python, Nov 14) | 3.50 m | 1.54 m | 0.87 m/s | 20.1 M |
+| `r5_p0.42` | 6.96 m | 2.19 m | 1.87 m/s | 1.3 M |
+| `r4_clamp` (`P_SPEED_MODE=1`, prior 0.75) | 4.13 m | 1.90 m | 0.80 m/s | 2.6 M |
+| Christopher `eskf_e6_bg05` | 5.80 m | 2.14 m | 2.34 m/s | 1.3 M |
+
+- The learned IMU speed model extrapolates badly on agile flights; clamping its ratio to the training mean to
+  [0.5, 1.5] (`P_SPEED_MODE=1`, `P_SPEED_LO/HI`) cut ATE from 6.96 to 4.13 m and gave the lowest velocity error.
+  `P_SPEED_MODE=2` (ratio to its own running mean) was worse on public and on the proxy.
+- Remaining gap to `e5` is shape (Sim(3) 1.90 vs 1.54 m, drift/m about 2x): the fuel trims (20 corners, 5 px LK
+  window, 5 iterations, strips) were tuned on gentle flights. Next: re-tune tracking on agile data.
+- Episode `726458d9bc31` has about 0.7 rad 1-s rotation RPE for every submission: likely gyro saturation.
+- Agile proxy: `scripts/agile_autopilot_proxy.patch` (apply to the pinned viobench, then `viobench simulate`;
+  revert afterwards) raises the autopilot's speed, acceleration, jerk and yaw-rate limits. 10 s episodes reproduced
+  the server's order, not its scale; use full-length episodes next time. Simulation needs `minizip` and
+  `vulkan-headers` (Arch), `CPATH=/usr/include/minizip` and `LD_PRELOAD=/usr/lib/libcblas.so.3`; it renders at
+  about 0.3 frames/s per episode, bound by one CPU thread. `scripts/eval_proxy.sh` scores builds on any episodes.
+
 ## Not completed or not known
 
 - No live-server comparison, submission, or measurement under the server's `/config` limits.

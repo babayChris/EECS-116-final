@@ -234,8 +234,21 @@ private:
             }
         }
         const double damped = std::max(MEAN + P_SPEED_SHRINK * (prediction - MEAN), 0.03);
+#if P_SPEED_MODE == 1
+        // clamped: the model's speed relative to its training mean, limited to [LO, HI], times the prior
+        return P_SPEED_PRIOR * std::min(std::max(damped / MEAN, (double)P_SPEED_LO), (double)P_SPEED_HI);
+#elif P_SPEED_MODE == 2
+        // relative: the model's speed relative to its own running mean (time constant P_SPEED_EMA_TAU), so a shift
+        // in its overall level on unfamiliar flights cancels; limited to [LO, HI], times the prior
+        if (speed_ema_ <= 0) speed_ema_ = damped;
+        else speed_ema_ += std::min(std::max(t - speed_ema_t_, 0.0) / P_SPEED_EMA_TAU, 1.0) * (damped - speed_ema_);
+        speed_ema_t_ = t;
+        return P_SPEED_PRIOR * std::min(std::max(damped / speed_ema_, (double)P_SPEED_LO), (double)P_SPEED_HI);
+#else
         return damped * (P_SPEED_PRIOR / MEAN);
+#endif
     }
+    double speed_ema_ = 0, speed_ema_t_ = 0;
     SpeedSample speed_ring_[SPEED_RING];
     double speed_sum_[SPEED_WINDOWS][9] = {}, speed_sq_[SPEED_WINDOWS][9] = {};
     long speed_start_[SPEED_WINDOWS] = {}, speed_count_ = 0;
