@@ -164,6 +164,32 @@ Estimated server area for n4 + k7: +3.64% (public) / +3.39% (held-out numbers), 
   turn-rate model (speed correlates -0.4 with |gyro| but using it hurt), accelerometer (tilt leakage still > true
   acceleration with tilt correction). True drone tilt is about 0.5 deg: the flights are nearly level.
 
+## Update, November 22, 2026: stage 2, unaligned ATE
+
+Stage 2 (deadline Nov 22, 23:59) scores **unaligned ATE** (position RMSE in frame-0 axes; upstream viobench
+`bd19c5f`) on 13 private "more agile" episodes (`private_stage2`, not downloadable, generator not published).
+Sim(3) ATE is only a diagnostic now, so the step length must be in metres. Record:
+`results/klt-bounded/nov22_stage2.json`; build every variant with `bash scripts/build_stage2.sh sweep`.
+
+| Public set (sandbox) | Unaligned ATE | Sim(3) ATE | Peak fuel |
+|---|---:|---:|---:|
+| `r4` (speed rescaled to 0.5 m/s) | 2.354 m | 0.356 m | 2.49 M |
+| `r4m` (`P_SPEED_PRIOR` = training mean 0.3246: metric speed) | 1.017 m | 0.356 m | 2.49 M |
+| `n4m` (constant 0.3246 m/s, no speed model) | 1.148 m | 0.401 m | 2.48 M |
+| `r5` (1/8 resolution, 0.5 m/s) | 1.315 m | 0.495 m | 1.22 M |
+| `r5_p0.42` (1/8 resolution, 0.42 m/s) | 1.010 m | 0.495 m | 1.22 M |
+
+- No code change: `learned_speed()` rescales the model's m/s prediction by `P_SPEED_PRIOR / MEAN`; setting the prior
+  to the training mean makes the output metric.
+- The 1/8-resolution build is best near 0.42 m/s (swept 0.3246-0.55), not at the true mean: noisier directions make
+  the path zig-zag, so the net displacement is shorter than the distance stepped. At the true mean it scores 1.546 m.
+- Submission candidates: `r5_p0.42` (dominates `r4m` on public) and `r4m` as a hedge, since the quarter-resolution
+  build may track better on agile flights.
+- Unknown: how fast the agile flights are. All tuning is on the older, gentler public flights; if the new flights are
+  much faster, these speeds undershoot. The speed model was trained on old flights, so its extrapolation is untested.
+- `victor/learned-speed` (Python flow + IMU speed, 26 M fuel) is superseded by the IMU-only C++ model; kept as the
+  record of the flow and track-depth negative results.
+
 ## Not completed or not known
 
 - No live-server comparison, submission, or measurement under the server's `/config` limits.
