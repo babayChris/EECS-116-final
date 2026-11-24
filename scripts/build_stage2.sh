@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Stage 2 (Nov 22): the metric changed from Sim(3) ATE to unaligned ATE, so the step length must be in metres.
 # Builds the C++ variants measured that day; each is the native/klt_bounded code plus parameter overrides.
-#   bash scripts/build_stage2.sh            # submission candidates r4m and r5_p0.42
+#   bash scripts/build_stage2.sh            # the two stage 2 submissions, r4_clamp and r5_p0.42, plus r4m
 #   bash scripts/build_stage2.sh sweep      # also every variant in results/klt-bounded/nov22_stage2.json
 # Evaluate with: bash scripts/eval_cpp.sh 10 5 <names...>
 set -euo pipefail
@@ -17,6 +17,10 @@ R5="P_SCALE=0.125 P_FAST_GRAY=-1 P_GRAY_ROWS_8=2 P_BIAS_BASELINE=30 P_MIN_DISTAN
 # directions shorten the net path; 0.42 was best on the public set (swept 0.3246-0.55).
 bash scripts/build_cpp_variant.sh r4m $R4 P_SPEED_PRIOR=0.3246063005
 bash scripts/build_cpp_variant.sh r5_p0.42 $R5 P_SPEED_PRIOR=0.42
+# r4_clamp (submitted): the learned speed's ratio to its training mean, clamped to [0.5, 1.5], times 0.75 m/s.
+# Rebuilds byte-identical to the submitted file (sha256 e998bc11...). The submitted r5_p0.42 (23fd42f8...) was built
+# before P_SPEED_MODE existed; today's build differs only by two unused fields and computes the same output.
+bash scripts/build_cpp_variant.sh r4_clamp $R4 P_SPEED_PRIOR=0.75 P_SPEED_MODE=1
 if [ "${1:-}" = sweep ]; then
   bash scripts/build_cpp_variant.sh r4 $R4
   for p in 0.37 0.42; do bash scripts/build_cpp_variant.sh r4_p$p $R4 P_SPEED_PRIOR=$p; done

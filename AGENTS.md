@@ -1,6 +1,7 @@
 # Agent handoff — EECS 116 Final
 
-Last updated: November 13, 2026 (America/Los_Angeles), after stage 2, the broader study and the held-out check.
+Last updated: November 23, 2026 (America/Los_Angeles), after both submissions. Sections below are dated; earlier ones are
+snapshots and some of their "not yet" statements are superseded by later sections.
 
 ## Goal and conversation context
 
@@ -211,13 +212,21 @@ Sim(3) ATE is only a diagnostic now, so the step length must be in metres. Recor
   `vulkan-headers` (Arch), `CPATH=/usr/include/minizip` and `LD_PRELOAD=/usr/lib/libcblas.so.3`; it renders at
   about 0.3 frames/s per episode, bound by one CPU thread. `scripts/eval_proxy.sh` scores builds on any episodes.
 
+## Submissions and repositories (November 23, 2026)
+
+- Stage 1: Python `e5_p05_base3`, submitted Nov 14 (`results/klt-bounded/server_nov14.json`). Stage 2: C++
+  `r4_clamp` and `r5_p0.42`, submitted Nov 22 (`results/klt-bounded/nov22_stage2.json`).
+- Tags `submission_stage1` (674a55a) and `submission_stage2` (`main` after merging `victor/stage2-metric`) exist in
+  both the team repository and the course repository `ucb-eecs116/2026-fall-project3-modulo`, which instructors and
+  other teams can read. Push only `main` and tags there; working branches stay in the team repository.
+- Not merged into `main`: `qr/1115-screening`, `victor/learned-speed` (superseded), and Christopher's unpushed
+  attempt (not to be merged, per Christopher).
+
 ## Not completed or not known
 
-- No live-server comparison, submission, or measurement under the server's `/config` limits.
-- No training or learned weights. Held-out set incomplete (8 of 10; one HSSD episode). No native port of our estimator.
-- No competition submission has been made.
-- The live server URL, current baseline points, selected evaluation hashes, and current server limits have not been obtained. A live Pareto comparison is therefore unavailable.
-- Do not infer a Pareto win from the one-episode host result, upstream illustrative fuel numbers, or a paper's hardware timings.
+- The stage 2 private episodes and their generator are not available; all tuning used the gentler public flights.
+- Held-out set incomplete (8 of 10; one HSSD episode).
+- Do not infer a Pareto win from host results, upstream illustrative fuel numbers, or a paper's hardware timings.
 
 ## Scoring facts that determine the approach
 
