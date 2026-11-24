@@ -1,0 +1,692 @@
+{
+ "recorded": "2026-11-22",
+ "note": "Stage 2: the headline metric changed from Sim(3) ATE to unaligned ATE (position RMSE in frame-0 axes, upstream viobench bd19c5f). Sandbox (WASM, default limits) on the 10 public episodes; the local evaluator at the pinned upstream commit already reports unaligned ATE per episode as metrics.ate_rmse. The stage 2 evaluation episodes (private_stage2, 13, 'more agile') are not downloadable, so every number here is on the older public flights.",
+ "code_commit": "189a3f932d8ffbff805801bf21bfeef5d2226424",
+ "upstream_commit": "17303aa14ba14e16cb54d9291d684371e1d3b548",
+ "build": "bash scripts/build_stage2.sh sweep",
+ "submission_candidates": [
+  "r4_clamp (submitted)",
+  "r5_p0.42 (submitted)"
+ ],
+ "variants": {
+  "r4": {
+   "overrides": [
+    "P_BIAS_BASELINE 30",
+    "P_FAST_GRAY -1",
+    "P_MIN_TRACKS 12",
+    "P_MIN_INLIERS 8",
+    "P_MAX_CORNERS 20",
+    "P_E_MAX_POINTS 16",
+    "P_KR_HYPOTHESES 8",
+    "P_REPLENISH_FRACTION 0.85",
+    "P_DETECT_STRIPS 3",
+    "P_LK_PREDICT 1",
+    "P_LK_WIN 5",
+    "P_LK_ITERS 5",
+    "P_SPEED_MODEL 1"
+   ],
+   "ate_mean_m": 2.3543,
+   "ate_median_m": 1.7564,
+   "sim3_ate_mean_m": 0.3562,
+   "sim3_scale_median": 0.746,
+   "fuel_per_frame_max": 2492507,
+   "fuel_per_frame_median": 1759972.0,
+   "completed": 10,
+   "filled_frames": 0,
+   "per_episode_ate_m": [
+    3.6232,
+    4.3493,
+    1.26,
+    4.0007,
+    3.1716,
+    1.1705,
+    2.1899,
+    1.3229,
+    1.2264,
+    1.229
+   ],
+   "wasm_sha256": "2a627b7f2f73e45972bc0afbeecd6f90b0e6f77630a27a549d2fc13c8794d5a6"
+  },
+  "r4m": {
+   "overrides": [
+    "P_BIAS_BASELINE 30",
+    "P_FAST_GRAY -1",
+    "P_MIN_TRACKS 12",
+    "P_MIN_INLIERS 8",
+    "P_MAX_CORNERS 20",
+    "P_E_MAX_POINTS 16",
+    "P_KR_HYPOTHESES 8",
+    "P_REPLENISH_FRACTION 0.85",
+    "P_DETECT_STRIPS 3",
+    "P_LK_PREDICT 1",
+    "P_LK_WIN 5",
+    "P_LK_ITERS 5",
+    "P_SPEED_MODEL 1",
+    "P_SPEED_PRIOR 0.3246063005"
+   ],
+   "ate_mean_m": 1.0171,
+   "ate_median_m": 0.9894,
+   "sim3_ate_mean_m": 0.3562,
+   "sim3_scale_median": 1.149,
+   "fuel_per_frame_max": 2492505,
+   "fuel_per_frame_median": 1759970.0,
+   "completed": 10,
+   "filled_frames": 0,
+   "per_episode_ate_m": [
+    0.7327,
+    1.586,
+    1.0714,
+    0.7891,
+    1.3077,
+    1.0604,
+    0.7506,
+    0.8945,
+    1.0096,
+    0.9692
+   ],
+   "wasm_sha256": "114d46e7b2a2278fb5fc9ee54c2eeb276880b1199018d44c1918ba4c77306eae"
+  },
+  "r4_p0.37": {
+   "overrides": [
+    "P_BIAS_BASELINE 30",
+    "P_FAST_GRAY -1",
+    "P_MIN_TRACKS 12",
+    "P_MIN_INLIERS 8",
+    "P_MAX_CORNERS 20",
+    "P_E_MAX_POINTS 16",
+    "P_KR_HYPOTHESES 8",
+    "P_REPLENISH_FRACTION 0.85",
+    "P_DETECT_STRIPS 3",
+    "P_LK_PREDICT 1",
+    "P_LK_WIN 5",
+    "P_LK_ITERS 5",
+    "P_SPEED_MODEL 1",
+    "P_SPEED_PRIOR 0.37"
+   ],
+   "ate_mean_m": 1.0473,
+   "ate_median_m": 0.8456,
+   "sim3_ate_mean_m": 0.3562,
+   "sim3_scale_median": 1.008,
+   "fuel_per_frame_max": 2492507,
+   "fuel_per_frame_median": 1759972.0,
+   "completed": 10,
+   "filled_frames": 0,
+   "per_episode_ate_m": [
+    0.8757,
+    1.7779,
+    0.9937,
+    1.5582,
+    1.7204,
+    0.8156,
+    0.4913,
+    0.6961,
+    0.7941,
+    0.7506
+   ],
+   "wasm_sha256": "c119cccfcee06c9dbbd8b3bc02de226365632296913cb5bedb48ecbd3e370bbf"
+  },
+  "r4_p0.42": {
+   "overrides": [
+    "P_BIAS_BASELINE 30",
+    "P_FAST_GRAY -1",
+    "P_MIN_TRACKS 12",
+    "P_MIN_INLIERS 8",
+    "P_MAX_CORNERS 20",
+    "P_E_MAX_POINTS 16",
+    "P_KR_HYPOTHESES 8",
+    "P_REPLENISH_FRACTION 0.85",
+    "P_DETECT_STRIPS 3",
+    "P_LK_PREDICT 1",
+    "P_LK_WIN 5",
+    "P_LK_ITERS 5",
+    "P_SPEED_MODEL 1",
+    "P_SPEED_PRIOR 0.42"
+   ],
+   "ate_mean_m": 1.431,
+   "ate_median_m": 1.016,
+   "sim3_ate_mean_m": 0.3562,
+   "sim3_scale_median": 0.888,
+   "fuel_per_frame_max": 2492507,
+   "fuel_per_frame_median": 1759972.0,
+   "completed": 10,
+   "filled_frames": 0,
+   "per_episode_ate_m": [
+    1.8623,
+    2.604,
+    1.0161,
+    2.485,
+    2.2523,
+    0.7628,
+    1.016,
+    0.7685,
+    0.7862,
+    0.7567
+   ],
+   "wasm_sha256": "17b71ad40e3c2798afff1bfded6b269d959766593bb6a0059067f08aef51e2ff"
+  },
+  "n4m": {
+   "overrides": [
+    "P_BIAS_BASELINE 30",
+    "P_FAST_GRAY -1",
+    "P_MIN_TRACKS 12",
+    "P_MIN_INLIERS 8",
+    "P_MAX_CORNERS 20",
+    "P_E_MAX_POINTS 16",
+    "P_KR_HYPOTHESES 8",
+    "P_REPLENISH_FRACTION 0.85",
+    "P_DETECT_STRIPS 3",
+    "P_LK_PREDICT 1",
+    "P_LK_WIN 5",
+    "P_LK_ITERS 5",
+    "P_SPEED_PRIOR 0.3246063005"
+   ],
+   "ate_mean_m": 1.1483,
+   "ate_median_m": 1.1431,
+   "sim3_ate_mean_m": 0.4013,
+   "sim3_scale_median": 1.188,
+   "fuel_per_frame_max": 2477739,
+   "fuel_per_frame_median": 1744214.0,
+   "completed": 10,
+   "filled_frames": 0,
+   "per_episode_ate_m": [
+    1.02,
+    1.4325,
+    1.343,
+    1.0608,
+    1.2763,
+    1.1381,
+    1.0895,
+    0.7648,
+    1.1482,
+    1.2097
+   ],
+   "wasm_sha256": "42cef4a6db63420d8315ac621e5bb90d1cf16e50b89df39382ff5a5de839ad44"
+  },
+  "r5": {
+   "overrides": [
+    "P_SCALE 0.125",
+    "P_FAST_GRAY -1",
+    "P_GRAY_ROWS_8 2",
+    "P_BIAS_BASELINE 30",
+    "P_MIN_DISTANCE 2.0",
+    "P_LK_WIN 5",
+    "P_DETECT_STRIPS 3",
+    "P_MAX_CORNERS 16",
+    "P_E_MAX_POINTS 16",
+    "P_KR_HYPOTHESES 8",
+    "P_MIN_TRACKS 8",
+    "P_MIN_INLIERS 6",
+    "P_REPLENISH_FRACTION 0.7",
+    "P_SPEED_MODEL 1"
+   ],
+   "ate_mean_m": 1.3154,
+   "ate_median_m": 1.2874,
+   "sim3_ate_mean_m": 0.4946,
+   "sim3_scale_median": 0.948,
+   "fuel_per_frame_max": 1221738,
+   "fuel_per_frame_median": 820356.0,
+   "completed": 10,
+   "filled_frames": 0,
+   "per_episode_ate_m": [
+    1.6247,
+    2.0325,
+    1.375,
+    1.7977,
+    1.1997,
+    1.07,
+    1.4129,
+    1.1231,
+    1.0,
+    0.5184
+   ],
+   "wasm_sha256": "6e743f551a298be646952f65a00b9ca85bc732ffefb2325e6da6c01054d7260b"
+  },
+  "r5m": {
+   "overrides": [
+    "P_SCALE 0.125",
+    "P_FAST_GRAY -1",
+    "P_GRAY_ROWS_8 2",
+    "P_BIAS_BASELINE 30",
+    "P_MIN_DISTANCE 2.0",
+    "P_LK_WIN 5",
+    "P_DETECT_STRIPS 3",
+    "P_MAX_CORNERS 16",
+    "P_E_MAX_POINTS 16",
+    "P_KR_HYPOTHESES 8",
+    "P_MIN_TRACKS 8",
+    "P_MIN_INLIERS 6",
+    "P_REPLENISH_FRACTION 0.7",
+    "P_SPEED_MODEL 1",
+    "P_SPEED_PRIOR 0.3246063005"
+   ],
+   "ate_mean_m": 1.5455,
+   "ate_median_m": 1.5274,
+   "sim3_ate_mean_m": 0.4946,
+   "sim3_scale_median": 1.461,
+   "fuel_per_frame_max": 1221736,
+   "fuel_per_frame_median": 820354.0,
+   "completed": 10,
+   "filled_frames": 0,
+   "per_episode_ate_m": [
+    2.021,
+    2.5457,
+    1.5878,
+    0.9846,
+    0.9796,
+    1.6154,
+    1.1931,
+    1.6993,
+    1.467,
+    1.3614
+   ],
+   "wasm_sha256": "8bb79c0c0398ac8d87a191b47436110ceacf83c72c49d421517159f6df527dee"
+  },
+  "r5_p0.37": {
+   "overrides": [
+    "P_SCALE 0.125",
+    "P_FAST_GRAY -1",
+    "P_GRAY_ROWS_8 2",
+    "P_BIAS_BASELINE 30",
+    "P_MIN_DISTANCE 2.0",
+    "P_LK_WIN 5",
+    "P_DETECT_STRIPS 3",
+    "P_MAX_CORNERS 16",
+    "P_E_MAX_POINTS 16",
+    "P_KR_HYPOTHESES 8",
+    "P_MIN_TRACKS 8",
+    "P_MIN_INLIERS 6",
+    "P_REPLENISH_FRACTION 0.7",
+    "P_SPEED_MODEL 1",
+    "P_SPEED_PRIOR 0.37"
+   ],
+   "ate_mean_m": 1.1837,
+   "ate_median_m": 1.273,
+   "sim3_ate_mean_m": 0.4946,
+   "sim3_scale_median": 1.281,
+   "fuel_per_frame_max": 1221738,
+   "fuel_per_frame_median": 820356.0,
+   "completed": 10,
+   "filled_frames": 0,
+   "per_episode_ate_m": [
+    1.3249,
+    1.9181,
+    1.4852,
+    0.5239,
+    0.8216,
+    1.3699,
+    0.6572,
+    1.4678,
+    1.2211,
+    1.0478
+   ],
+   "wasm_sha256": "7b5b59bd6208597e322d9f06c4c5828572bbf8cac514a1fb3270a7d5a6e6a9e4"
+  },
+  "r5_p0.40": {
+   "overrides": [
+    "P_SCALE 0.125",
+    "P_FAST_GRAY -1",
+    "P_GRAY_ROWS_8 2",
+    "P_BIAS_BASELINE 30",
+    "P_MIN_DISTANCE 2.0",
+    "P_LK_WIN 5",
+    "P_DETECT_STRIPS 3",
+    "P_MAX_CORNERS 16",
+    "P_E_MAX_POINTS 16",
+    "P_KR_HYPOTHESES 8",
+    "P_MIN_TRACKS 8",
+    "P_MIN_INLIERS 6",
+    "P_REPLENISH_FRACTION 0.7",
+    "P_SPEED_MODEL 1",
+    "P_SPEED_PRIOR 0.40"
+   ],
+   "ate_mean_m": 1.0388,
+   "ate_median_m": 1.0375,
+   "sim3_ate_mean_m": 0.4946,
+   "sim3_scale_median": 1.185,
+   "fuel_per_frame_max": 1221738,
+   "fuel_per_frame_median": 820356.0,
+   "completed": 10,
+   "filled_frames": 0,
+   "per_episode_ate_m": [
+    0.9826,
+    1.6335,
+    1.4337,
+    0.5531,
+    0.8022,
+    1.236,
+    0.462,
+    1.3377,
+    1.0924,
+    0.8549
+   ],
+   "wasm_sha256": "3b597279868a2432886d07c7ca15682a21df339e34fe981ba755ce57ded4f3cd"
+  },
+  "r5_p0.42": {
+   "overrides": [
+    "P_SCALE 0.125",
+    "P_FAST_GRAY -1",
+    "P_GRAY_ROWS_8 2",
+    "P_BIAS_BASELINE 30",
+    "P_MIN_DISTANCE 2.0",
+    "P_LK_WIN 5",
+    "P_DETECT_STRIPS 3",
+    "P_MAX_CORNERS 16",
+    "P_E_MAX_POINTS 16",
+    "P_KR_HYPOTHESES 8",
+    "P_MIN_TRACKS 8",
+    "P_MIN_INLIERS 6",
+    "P_REPLENISH_FRACTION 0.7",
+    "P_SPEED_MODEL 1",
+    "P_SPEED_PRIOR 0.42"
+   ],
+   "ate_mean_m": 1.0098,
+   "ate_median_m": 0.9527,
+   "sim3_ate_mean_m": 0.4946,
+   "sim3_scale_median": 1.129,
+   "fuel_per_frame_max": 1221738,
+   "fuel_per_frame_median": 820356.0,
+   "completed": 10,
+   "filled_frames": 0,
+   "per_episode_ate_m": [
+    0.8776,
+    1.5382,
+    1.4076,
+    0.7375,
+    0.8318,
+    1.1642,
+    0.5108,
+    1.2646,
+    1.0278,
+    0.7381
+   ],
+   "wasm_sha256": "23fd42f8a78984861af2f3d8ecbc31e0b2e1d6069da8e13ccab7bbda69455add"
+  },
+  "r5_p0.47": {
+   "overrides": [
+    "P_SCALE 0.125",
+    "P_FAST_GRAY -1",
+    "P_GRAY_ROWS_8 2",
+    "P_BIAS_BASELINE 30",
+    "P_MIN_DISTANCE 2.0",
+    "P_LK_WIN 5",
+    "P_DETECT_STRIPS 3",
+    "P_MAX_CORNERS 16",
+    "P_E_MAX_POINTS 16",
+    "P_KR_HYPOTHESES 8",
+    "P_MIN_TRACKS 8",
+    "P_MIN_INLIERS 6",
+    "P_REPLENISH_FRACTION 0.7",
+    "P_SPEED_MODEL 1",
+    "P_SPEED_PRIOR 0.47"
+   ],
+   "ate_mean_m": 1.1419,
+   "ate_median_m": 1.1044,
+   "sim3_ate_mean_m": 0.4946,
+   "sim3_scale_median": 1.009,
+   "fuel_per_frame_max": 1221738,
+   "fuel_per_frame_median": 820356.0,
+   "completed": 10,
+   "filled_frames": 0,
+   "per_episode_ate_m": [
+    1.2007,
+    1.7064,
+    1.3733,
+    1.3778,
+    1.0272,
+    1.0648,
+    1.0275,
+    1.144,
+    0.9639,
+    0.5333
+   ],
+   "wasm_sha256": "2eca834aa3b20f2cbbc4937f1d713b087d8c3a751d08c176605975572f600963"
+  },
+  "r5_p0.55": {
+   "overrides": [
+    "P_SCALE 0.125",
+    "P_FAST_GRAY -1",
+    "P_GRAY_ROWS_8 2",
+    "P_BIAS_BASELINE 30",
+    "P_MIN_DISTANCE 2.0",
+    "P_LK_WIN 5",
+    "P_DETECT_STRIPS 3",
+    "P_MAX_CORNERS 16",
+    "P_E_MAX_POINTS 16",
+    "P_KR_HYPOTHESES 8",
+    "P_MIN_TRACKS 8",
+    "P_MIN_INLIERS 6",
+    "P_REPLENISH_FRACTION 0.7",
+    "P_SPEED_MODEL 1",
+    "P_SPEED_PRIOR 0.55"
+   ],
+   "ate_mean_m": 1.6978,
+   "ate_median_m": 1.475,
+   "sim3_ate_mean_m": 0.4946,
+   "sim3_scale_median": 0.862,
+   "fuel_per_frame_max": 1221738,
+   "fuel_per_frame_median": 820356.0,
+   "completed": 10,
+   "filled_frames": 0,
+   "per_episode_ate_m": [
+    2.4416,
+    2.7658,
+    1.4148,
+    2.5144,
+    1.5352,
+    1.1846,
+    2.0825,
+    1.1807,
+    1.1681,
+    0.6904
+   ],
+   "wasm_sha256": "394ccc793260310efcd52940b19d69b383f75d4d81a5d3d5a7a6efa7f701f412"
+  },
+  "r4_clamp": {
+   "overrides": [
+    "P_BIAS_BASELINE 30",
+    "P_FAST_GRAY -1",
+    "P_MIN_TRACKS 12",
+    "P_MIN_INLIERS 8",
+    "P_MAX_CORNERS 20",
+    "P_E_MAX_POINTS 16",
+    "P_KR_HYPOTHESES 8",
+    "P_REPLENISH_FRACTION 0.85",
+    "P_DETECT_STRIPS 3",
+    "P_LK_PREDICT 1",
+    "P_LK_WIN 5",
+    "P_LK_ITERS 5",
+    "P_SPEED_MODEL 1",
+    "P_SPEED_PRIOR 0.75",
+    "P_SPEED_MODE 1"
+   ],
+   "wasm_sha256": "e998bc111c517ab9e8bf7beac9bbbeeff1bf69da0abdb47a26ef7f06903aac55"
+  },
+  "r4_rel": {
+   "overrides": [
+    "P_BIAS_BASELINE 30",
+    "P_FAST_GRAY -1",
+    "P_MIN_TRACKS 12",
+    "P_MIN_INLIERS 8",
+    "P_MAX_CORNERS 20",
+    "P_E_MAX_POINTS 16",
+    "P_KR_HYPOTHESES 8",
+    "P_REPLENISH_FRACTION 0.85",
+    "P_DETECT_STRIPS 3",
+    "P_LK_PREDICT 1",
+    "P_LK_WIN 5",
+    "P_LK_ITERS 5",
+    "P_SPEED_MODEL 1",
+    "P_SPEED_PRIOR 0.75",
+    "P_SPEED_MODE 2"
+   ],
+   "wasm_sha256": "110ec2ec74ff56a0b25ca108d3378cfe2cf670c7fe8429f0364412fa6df5a7c3"
+  },
+  "r4_clamp_p03": {
+   "overrides": [
+    "P_BIAS_BASELINE 30",
+    "P_FAST_GRAY -1",
+    "P_MIN_TRACKS 12",
+    "P_MIN_INLIERS 8",
+    "P_MAX_CORNERS 20",
+    "P_E_MAX_POINTS 16",
+    "P_KR_HYPOTHESES 8",
+    "P_REPLENISH_FRACTION 0.85",
+    "P_DETECT_STRIPS 3",
+    "P_LK_PREDICT 1",
+    "P_LK_WIN 5",
+    "P_LK_ITERS 5",
+    "P_SPEED_MODEL 1",
+    "P_SPEED_PRIOR 0.3246063005",
+    "P_SPEED_MODE 1"
+   ],
+   "wasm_sha256": "8e10c63191e9b064a590fcba98b368a1bb1fd354f3c381a7e4ad72529a5965a8",
+   "ate_mean_m": 1.0222,
+   "sim3_ate_mean_m": 0.3566,
+   "fuel_per_frame_max": 2493049
+  },
+  "r4_rel_p03": {
+   "overrides": [
+    "P_BIAS_BASELINE 30",
+    "P_FAST_GRAY -1",
+    "P_MIN_TRACKS 12",
+    "P_MIN_INLIERS 8",
+    "P_MAX_CORNERS 20",
+    "P_E_MAX_POINTS 16",
+    "P_KR_HYPOTHESES 8",
+    "P_REPLENISH_FRACTION 0.85",
+    "P_DETECT_STRIPS 3",
+    "P_LK_PREDICT 1",
+    "P_LK_WIN 5",
+    "P_LK_ITERS 5",
+    "P_SPEED_MODEL 1",
+    "P_SPEED_PRIOR 0.3246063005",
+    "P_SPEED_MODE 2"
+   ],
+   "wasm_sha256": "4151b757ecb42b73be3a20f69911d1ba87f9e3a184b63834914bbafc4d0ffc65",
+   "ate_mean_m": 1.5754,
+   "sim3_ate_mean_m": 0.4928,
+   "fuel_per_frame_max": 2493089
+  },
+  "c4_p0.5": {
+   "overrides": [
+    "P_BIAS_BASELINE 30"
+   ],
+   "wasm_sha256": "8e84a3c4253fa4d3e170db694653e11eba38605a95f14d6f0f42200198d2254b",
+   "ate_mean_m": 2.2745,
+   "sim3_ate_mean_m": 0.4013,
+   "fuel_per_frame_max": 2477739
+  },
+  "c7_p0.5": {
+   "overrides": [
+    "P_SCALE 0.125",
+    "P_FAST_GRAY -1"
+   ],
+   "wasm_sha256": "e9bfce86c8af49235e338a224c5e2bf1d77fa4264c3c177854d8652893af1805",
+   "ate_mean_m": 1.3358,
+   "sim3_ate_mean_m": 0.5243,
+   "fuel_per_frame_max": 1209149
+  }
+ },
+ "agile_proxy": {
+  "note": "4 simulated 10 s episodes (ProcTHOR-Train-1, seeds 8801-8804) with a more agile autopilot: scripts/agile_autopilot_proxy.patch applied to the pinned viobench simulator template (cruise 0.8-1.6 m/s, max acceleration 2.5 m/s^2, jerk 8, yaw rate 2.0). True mean speed 0.31-0.48 m/s. A guess at the stage 2 change, not the real generator; it reproduced the server's order (e5 better than r5) but not the size of the gap.",
+  "results": {
+   "e5": {
+    "ate_mean_m": 0.629,
+    "sim3_ate_mean_m": 0.306,
+    "velocity_rmse": 0.406,
+    "fuel_per_frame_max": 19871163
+   },
+   "r5_p0.42": {
+    "ate_mean_m": 0.817,
+    "sim3_ate_mean_m": 0.245,
+    "velocity_rmse": 0.397,
+    "fuel_per_frame_max": 1185451
+   },
+   "c4_p0.5": {
+    "ate_mean_m": 0.726,
+    "sim3_ate_mean_m": 0.325,
+    "velocity_rmse": 0.413,
+    "fuel_per_frame_max": 2473876
+   },
+   "c4_p0.75": {
+    "ate_mean_m": 0.766,
+    "sim3_ate_mean_m": 0.325,
+    "velocity_rmse": 0.535,
+    "fuel_per_frame_max": 2473876
+   },
+   "c4_p1.0": {
+    "ate_mean_m": 1.206,
+    "sim3_ate_mean_m": 0.325,
+    "velocity_rmse": 0.72,
+    "fuel_per_frame_max": 2473873
+   },
+   "c4_p1.25": {
+    "ate_mean_m": 1.775,
+    "sim3_ate_mean_m": 0.325,
+    "velocity_rmse": 0.932,
+    "fuel_per_frame_max": 2473876
+   },
+   "c7_p0.75": {
+    "ate_mean_m": 0.667,
+    "sim3_ate_mean_m": 0.279,
+    "velocity_rmse": 0.614,
+    "fuel_per_frame_max": 1172097
+   },
+   "c7_p1.0": {
+    "ate_mean_m": 0.818,
+    "sim3_ate_mean_m": 0.279,
+    "velocity_rmse": 0.801,
+    "fuel_per_frame_max": 1172094
+   },
+   "r4m": {
+    "ate_mean_m": 0.867,
+    "sim3_ate_mean_m": 0.247,
+    "velocity_rmse": 0.336,
+    "fuel_per_frame_max": 2489009
+   },
+   "r4_clamp": {
+    "ate_mean_m": 0.579,
+    "sim3_ate_mean_m": 0.242,
+    "velocity_rmse": 0.433,
+    "fuel_per_frame_max": 2489025
+   },
+   "r4_rel": {
+    "ate_mean_m": 1.407,
+    "sim3_ate_mean_m": 0.297,
+    "velocity_rmse": 0.736,
+    "fuel_per_frame_max": 2489065
+   }
+  }
+ },
+ "server_stage2": {
+  "note": "Server, private_stage2 (12 episodes), Nov 22 2026, as reported on the submission pages.",
+  "e5_p05_base3 (Python, submitted Nov 14)": {
+   "ate_mean_m": 3.5,
+   "sim3_ate_mean_m": 1.54,
+   "velocity_rmse": 0.871,
+   "fuel_per_frame_max_M": 20.1
+  },
+  "r5_p0.42": {
+   "ate_mean_m": 6.96,
+   "sim3_ate_mean_m": 2.19,
+   "velocity_rmse": 1.87,
+   "fuel_per_frame_max_M": 1.3
+  },
+  "r4_clamp": {
+   "ate_mean_m": 4.13,
+   "sim3_ate_mean_m": 1.9,
+   "velocity_rmse": 0.803,
+   "fuel_per_frame_max_M": 2.6
+  },
+  "christopher eskf_e6_bg05": {
+   "ate_mean_m": 5.8,
+   "sim3_ate_mean_m": 2.14,
+   "velocity_rmse": 2.34,
+   "fuel_per_frame_max_M": 1.3
+  },
+  "observations": [
+   "Episode 726458d9bc31 has 1-s rotation RPE about 0.69-0.71 rad for every submission (others about 0.03): likely a data property such as gyro saturation.",
+   "r4_clamp has the lowest velocity error but worse Sim(3) shape than e5; its fuel trims (20 corners, 5 px LK window, 5 iterations, strip detection) were tuned on gentle flights."
+  ]
+ }
+}

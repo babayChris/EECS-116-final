@@ -120,6 +120,97 @@ All sandbox numbers: WASM, default local limits, public set unless noted. Record
 - Defined but not run: the `w_*` resolution × corner sweep on `c_best` (persist05 + fb1 + base3), and ORB-SLAM3's
   evaluation (it builds and passes check). The machine is shared with the user's other long jobs: limit parallelism.
 
+## Update, November 14, 2026: server baselines, fuel sweep and metric scale (both negative)
+
+Record: `results/klt-bounded/nov14_study.json`.
+
+- Server (current set: 20 episodes; limits equal the local defaults: 20 G fuel/step, 200 G init, 2 GiB, 2 uploads/day).
+  Baselines include `tiny_cnn` at 0.668 m / 14.7 M and VINS-Mono at 0.506 m / 1.88 G, so the estimated area for our
+  points is about +0.9% (e5 alone) and +0.96% (e3 + e5), not the +3.69% against local stand-ins. Planned first
+  uploads: `e5_p05_base3` and `e3_persist05`.
+- Fuel sweep (`f*`, sandbox): more corners, resolution, pyramid levels or hypotheses (21-55 M) gave 0.465-0.495 m,
+  within noise of e5. Vision quality is not the limit.
+- Metric scale (`speed_model: "metric"`, `m*`, host): a sliding-window fit of speeds to IMU velocity changes along
+  the visual directions. Every setting lost to constant speed (best 0.520 m). Cause: tilt error of 6-28 deg leaks
+  1-4.7 m/s^2 of gravity, 10-50x the flights' true accelerations (median 0.09 m/s^2). The option stays in
+  `solution.py`, off by default.
+- Next: the native C++ port of the e3/e5 estimator, to remove the 4.5 M/frame Python floor (`native/klt_bounded/`).
+
+## Update, November 15, 2026: C++ port, gyro bias from vision, low-fuel point
+
+Record: `results/klt-bounded/nov15_cpp.json` (43 C++ variants, public and held-out). Build a variant with
+`scripts/build_cpp_variant.sh <name> P_X=value ...` (copies `native/klt_bounded`, prepends the overrides to `params.h`),
+evaluate with `scripts/eval_cpp.sh <episodes> <parallel> <names...>`.
+
+| | Public ATE | Held-out ATE | Peak fuel |
+|---|---:|---:|---:|
+| Python `e5_p05_base3` | 0.471 m | 0.513 m | 19.8 M |
+| C++ e5 (`c0_e5`) | 0.466 m | 0.512 m | 5.8 M |
+| `n4_rf085_s3` (recommended main) | 0.405 m | 0.417 m | 3.0 M |
+| `k7_c16_rf07` (recommended low-fuel) | 0.524 m | 0.612 m | 1.2 M |
+
+Estimated server area for n4 + k7: +3.64% (public) / +3.39% (held-out numbers), against +0.96% for the Python pair.
+
+- Gyro bias from vision (`P_BIAS_BASELINE=30`, Python `bias_baseline_frames`): the rotation correction that best
+  explains tracks seen 30 frames apart moves the gyro bias (gain 0.02). True biases are 0.5-1.2 deg/s and the
+  start-of-episode calibration misses them when the drone starts moving. Main accuracy gain of the day.
+- Fuel: gray conversion dominated (2.4 M); a green-channel block mean (`P_FAST_GRAY=-1`) costs 0.7 M at 1/4 scale
+  and 0.11 M at 1/8 scale with 2 rows x 4 columns (`P_GRAY_ROWS_8=2`). Peak frames were full-image corner
+  detection on replenish (+1.4 M); `P_DETECT_STRIPS=3` bounds it but costs accuracy unless the replenish threshold
+  is high (0.85).
+- Oracle decomposition (host, b_B30_g0.02, public): true speed 0.410 -> 0.236 m, true direction -> 0.368, true
+  rotation -> 0.404, speed + direction -> 0.018. Speed is the remaining error.
+- Dead ends for speed: landmark triangulation (scale collapse; open-loop correlation with true speed 0.2-0.45),
+  turn-rate model (speed correlates -0.4 with |gyro| but using it hurt), accelerometer (tilt leakage still > true
+  acceleration with tilt correction). True drone tilt is about 0.5 deg: the flights are nearly level.
+
+## Update, November 22, 2026: stage 2, unaligned ATE
+
+Stage 2 (deadline Nov 22, 23:59) scores **unaligned ATE** (position RMSE in frame-0 axes; upstream viobench
+`bd19c5f`) on 13 private "more agile" episodes (`private_stage2`, not downloadable, generator not published).
+Sim(3) ATE is only a diagnostic now, so the step length must be in metres. Record:
+`results/klt-bounded/nov22_stage2.json`; build every variant with `bash scripts/build_stage2.sh sweep`.
+
+| Public set (sandbox) | Unaligned ATE | Sim(3) ATE | Peak fuel |
+|---|---:|---:|---:|
+| `r4` (speed rescaled to 0.5 m/s) | 2.354 m | 0.356 m | 2.49 M |
+| `r4m` (`P_SPEED_PRIOR` = training mean 0.3246: metric speed) | 1.017 m | 0.356 m | 2.49 M |
+| `n4m` (constant 0.3246 m/s, no speed model) | 1.148 m | 0.401 m | 2.48 M |
+| `r5` (1/8 resolution, 0.5 m/s) | 1.315 m | 0.495 m | 1.22 M |
+| `r5_p0.42` (1/8 resolution, 0.42 m/s) | 1.010 m | 0.495 m | 1.22 M |
+
+- No code change: `learned_speed()` rescales the model's m/s prediction by `P_SPEED_PRIOR / MEAN`; setting the prior
+  to the training mean makes the output metric.
+- The 1/8-resolution build is best near 0.42 m/s (swept 0.3246-0.55), not at the true mean: noisier directions make
+  the path zig-zag, so the net displacement is shorter than the distance stepped. At the true mean it scores 1.546 m.
+- Submission candidates: `r5_p0.42` (dominates `r4m` on public) and `r4m` as a hedge, since the quarter-resolution
+  build may track better on agile flights.
+- Unknown: how fast the agile flights are. All tuning is on the older, gentler public flights; if the new flights are
+  much faster, these speeds undershoot. The speed model was trained on old flights, so its extrapolation is untested.
+- `victor/learned-speed` (Python flow + IMU speed, 26 M fuel) is superseded by the IMU-only C++ model; kept as the
+  record of the flow and track-depth negative results.
+
+### Stage 2 server results and the agile proxy (late Nov 22)
+
+| Server, private_stage2 | Mean ATE | Sim(3) | Velocity RMSE | Peak fuel |
+|---|---:|---:|---:|---:|
+| `e5_p05_base3` (Python, Nov 14) | 3.50 m | 1.54 m | 0.87 m/s | 20.1 M |
+| `r5_p0.42` | 6.96 m | 2.19 m | 1.87 m/s | 1.3 M |
+| `r4_clamp` (`P_SPEED_MODE=1`, prior 0.75) | 4.13 m | 1.90 m | 0.80 m/s | 2.6 M |
+| Christopher `eskf_e6_bg05` | 5.80 m | 2.14 m | 2.34 m/s | 1.3 M |
+
+- The learned IMU speed model extrapolates badly on agile flights; clamping its ratio to the training mean to
+  [0.5, 1.5] (`P_SPEED_MODE=1`, `P_SPEED_LO/HI`) cut ATE from 6.96 to 4.13 m and gave the lowest velocity error.
+  `P_SPEED_MODE=2` (ratio to its own running mean) was worse on public and on the proxy.
+- Remaining gap to `e5` is shape (Sim(3) 1.90 vs 1.54 m, drift/m about 2x): the fuel trims (20 corners, 5 px LK
+  window, 5 iterations, strips) were tuned on gentle flights. Next: re-tune tracking on agile data.
+- Episode `726458d9bc31` has about 0.7 rad 1-s rotation RPE for every submission: likely gyro saturation.
+- Agile proxy: `scripts/agile_autopilot_proxy.patch` (apply to the pinned viobench, then `viobench simulate`;
+  revert afterwards) raises the autopilot's speed, acceleration, jerk and yaw-rate limits. 10 s episodes reproduced
+  the server's order, not its scale; use full-length episodes next time. Simulation needs `minizip` and
+  `vulkan-headers` (Arch), `CPATH=/usr/include/minizip` and `LD_PRELOAD=/usr/lib/libcblas.so.3`; it renders at
+  about 0.3 frames/s per episode, bound by one CPU thread. `scripts/eval_proxy.sh` scores builds on any episodes.
+
 ## Not completed or not known
 
 - No live-server comparison, submission, or measurement under the server's `/config` limits.

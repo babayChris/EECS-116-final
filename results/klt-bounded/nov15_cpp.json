@@ -1,0 +1,842 @@
+{
+ "recorded": "2026-11-15",
+ "note": "C++ port (native/klt_bounded). Sandbox, default limits. public = 10 public episodes; heldout = 8 held-out episodes. Variant settings: work/cpp/<name>/params.h (overrides at top). Area: server formula against the server baselines in nov14_study.json.",
+ "variants": {
+  "c10_eighth": {
+   "overrides": [
+    "P_BIAS_BASELINE 30",
+    "P_FAST_GRAY -1",
+    "P_SCALE 0.125",
+    "P_MAX_CORNERS 30",
+    "P_MIN_DISTANCE 2.0",
+    "P_LK_WIN 5",
+    "P_MIN_TRACKS 12",
+    "P_MIN_INLIERS 8"
+   ],
+   "public": {
+    "sim3_ate_mean_m": 0.5828,
+    "fuel_per_frame_max": 2991962,
+    "fuel_per_frame_median": 2309787.5,
+    "completed": 10
+   }
+  },
+  "c11_q_c20": {
+   "overrides": [
+    "P_BIAS_BASELINE 30",
+    "P_FAST_GRAY -1",
+    "P_MAX_CORNERS 24",
+    "P_E_MAX_POINTS 20",
+    "P_KR_HYPOTHESES 16",
+    "P_MIN_TRACKS 12",
+    "P_MIN_INLIERS 8"
+   ],
+   "public": {
+    "sim3_ate_mean_m": 0.4016,
+    "fuel_per_frame_max": 3510693,
+    "fuel_per_frame_median": 2038337.0,
+    "completed": 10
+   }
+  },
+  "c12_q_c30_lk5": {
+   "overrides": [
+    "P_BIAS_BASELINE 30",
+    "P_FAST_GRAY -1",
+    "P_MAX_CORNERS 30",
+    "P_LK_WIN 5",
+    "P_E_MAX_POINTS 24",
+    "P_KR_HYPOTHESES 24",
+    "P_MIN_TRACKS 15"
+   ],
+   "public": {
+    "sim3_ate_mean_m": 0.4237,
+    "fuel_per_frame_max": 3319504,
+    "fuel_per_frame_median": 1878169.0,
+    "completed": 10
+   }
+  },
+  "c2_fast2": {
+   "overrides": [
+    "P_FAST_GRAY 2"
+   ],
+   "public": {
+    "sim3_ate_mean_m": 0.5481,
+    "fuel_per_frame_max": 4414205,
+    "fuel_per_frame_median": 2787825.0,
+    "completed": 10
+   }
+  },
+  "c3_fast4": {
+   "overrides": [
+    "P_FAST_GRAY 4"
+   ],
+   "public": {
+    "sim3_ate_mean_m": 0.6112,
+    "fuel_per_frame_max": 4087459,
+    "fuel_per_frame_median": 2331524.5,
+    "completed": 10
+   }
+  },
+  "c4_bias30": {
+   "overrides": [
+    "P_BIAS_BASELINE 30",
+    "P_BIAS_GAIN 0.02"
+   ],
+   "public": {
+    "sim3_ate_mean_m": 0.4047,
+    "fuel_per_frame_max": 5855289,
+    "fuel_per_frame_median": 4202114.0,
+    "completed": 10
+   }
+  },
+  "c5_bias20": {
+   "overrides": [
+    "P_BIAS_BASELINE 20",
+    "P_BIAS_GAIN 0.02"
+   ],
+   "public": {
+    "sim3_ate_mean_m": 0.4052,
+    "fuel_per_frame_max": 5851844,
+    "fuel_per_frame_median": 4242091.0,
+    "completed": 10
+   }
+  },
+  "c6_bias20_g01": {
+   "overrides": [
+    "P_BIAS_BASELINE 20",
+    "P_BIAS_GAIN 0.01"
+   ],
+   "public": {
+    "sim3_ate_mean_m": 0.4065,
+    "fuel_per_frame_max": 5854744,
+    "fuel_per_frame_median": 4241631.0,
+    "completed": 10
+   }
+  },
+  "c7_green": {
+   "overrides": [
+    "P_BIAS_BASELINE 30",
+    "P_FAST_GRAY -1"
+   ],
+   "public": {
+    "sim3_ate_mean_m": 0.4415,
+    "fuel_per_frame_max": 4049142,
+    "fuel_per_frame_median": 2488227.5,
+    "completed": 10
+   }
+  },
+  "d1_c16": {
+   "overrides": [
+    "P_BIAS_BASELINE 30",
+    "P_FAST_GRAY -1",
+    "P_MIN_TRACKS 12",
+    "P_MIN_INLIERS 8",
+    "P_MAX_CORNERS 16",
+    "P_E_MAX_POINTS 16",
+    "P_KR_HYPOTHESES 16"
+   ],
+   "public": {
+    "sim3_ate_mean_m": 0.4191,
+    "fuel_per_frame_max": 3193329,
+    "fuel_per_frame_median": 1874323.5,
+    "completed": 10
+   }
+  },
+  "d2_c20_h8": {
+   "overrides": [
+    "P_BIAS_BASELINE 30",
+    "P_FAST_GRAY -1",
+    "P_MIN_TRACKS 12",
+    "P_MIN_INLIERS 8",
+    "P_MAX_CORNERS 20",
+    "P_E_MAX_POINTS 16",
+    "P_KR_HYPOTHESES 8"
+   ],
+   "public": {
+    "sim3_ate_mean_m": 0.3941,
+    "fuel_per_frame_max": 3395549,
+    "fuel_per_frame_median": 1929581.0,
+    "completed": 10
+   },
+   "heldout": {
+    "sim3_ate_mean_m": 0.4347,
+    "fuel_per_frame_max": 3611748,
+    "fuel_per_frame_median": 1920273.0,
+    "completed": 8
+   }
+  },
+  "d3_c24_lk5it": {
+   "overrides": [
+    "P_BIAS_BASELINE 30",
+    "P_FAST_GRAY -1",
+    "P_MIN_TRACKS 12",
+    "P_MIN_INLIERS 8",
+    "P_MAX_CORNERS 24",
+    "P_E_MAX_POINTS 20",
+    "P_KR_HYPOTHESES 16",
+    "P_LK_ITERS 5"
+   ],
+   "public": {
+    "sim3_ate_mean_m": 0.4213,
+    "fuel_per_frame_max": 3451695,
+    "fuel_per_frame_median": 2000243.0,
+    "completed": 10
+   }
+  },
+  "d4_c24_w5": {
+   "overrides": [
+    "P_BIAS_BASELINE 30",
+    "P_FAST_GRAY -1",
+    "P_MIN_TRACKS 12",
+    "P_MIN_INLIERS 8",
+    "P_MAX_CORNERS 24",
+    "P_E_MAX_POINTS 20",
+    "P_KR_HYPOTHESES 16",
+    "P_LK_WIN 5"
+   ],
+   "public": {
+    "sim3_ate_mean_m": 0.446,
+    "fuel_per_frame_max": 3232729,
+    "fuel_per_frame_median": 1750241.0,
+    "completed": 10
+   }
+  },
+  "d5_c12": {
+   "overrides": [
+    "P_BIAS_BASELINE 30",
+    "P_FAST_GRAY -1",
+    "P_MIN_TRACKS 12",
+    "P_MIN_INLIERS 8",
+    "P_MAX_CORNERS 12",
+    "P_E_MAX_POINTS 12",
+    "P_KR_HYPOTHESES 8",
+    "P_MIN_TRACKS 8",
+    "P_MIN_INLIERS 6"
+   ],
+   "public": {
+    "sim3_ate_mean_m": 0.4199,
+    "fuel_per_frame_max": 3188067,
+    "fuel_per_frame_median": 1671590.5,
+    "completed": 10
+   }
+  },
+  "d6_c24_b1": {
+   "overrides": [
+    "P_BIAS_BASELINE 30",
+    "P_FAST_GRAY -1",
+    "P_MIN_TRACKS 12",
+    "P_MIN_INLIERS 8",
+    "P_MAX_CORNERS 24",
+    "P_E_MAX_POINTS 20",
+    "P_KR_HYPOTHESES 16",
+    "P_BASELINE_FRAMES 1"
+   ],
+   "public": {
+    "sim3_ate_mean_m": 0.4084,
+    "fuel_per_frame_max": 3498514,
+    "fuel_per_frame_median": 1965134.5,
+    "completed": 10
+   }
+  },
+  "e1_strip2": {
+   "overrides": [
+    "P_BIAS_BASELINE 30",
+    "P_FAST_GRAY -1",
+    "P_MIN_TRACKS 12",
+    "P_MIN_INLIERS 8",
+    "P_MAX_CORNERS 20",
+    "P_E_MAX_POINTS 16",
+    "P_KR_HYPOTHESES 8",
+    "P_DETECT_STRIPS 2"
+   ],
+   "public": {
+    "sim3_ate_mean_m": 0.6944,
+    "fuel_per_frame_max": 2731700,
+    "fuel_per_frame_median": 1832506.0,
+    "completed": 10
+   }
+  },
+  "e2_strip3": {
+   "overrides": [
+    "P_BIAS_BASELINE 30",
+    "P_FAST_GRAY -1",
+    "P_MIN_TRACKS 12",
+    "P_MIN_INLIERS 8",
+    "P_MAX_CORNERS 20",
+    "P_E_MAX_POINTS 16",
+    "P_KR_HYPOTHESES 8",
+    "P_DETECT_STRIPS 3"
+   ],
+   "public": {
+    "sim3_ate_mean_m": 0.7621,
+    "fuel_per_frame_max": 2542518,
+    "fuel_per_frame_median": 1791493.5,
+    "completed": 10
+   }
+  },
+  "e3_strip4": {
+   "overrides": [
+    "P_BIAS_BASELINE 30",
+    "P_FAST_GRAY -1",
+    "P_MIN_TRACKS 12",
+    "P_MIN_INLIERS 8",
+    "P_MAX_CORNERS 20",
+    "P_E_MAX_POINTS 16",
+    "P_KR_HYPOTHESES 8",
+    "P_DETECT_STRIPS 4"
+   ],
+   "public": {
+    "sim3_ate_mean_m": 0.6551,
+    "fuel_per_frame_max": 2412423,
+    "fuel_per_frame_median": 1776003.5,
+    "completed": 10
+   }
+  },
+  "e4_strip3_rf07": {
+   "overrides": [
+    "P_BIAS_BASELINE 30",
+    "P_FAST_GRAY -1",
+    "P_MIN_TRACKS 12",
+    "P_MIN_INLIERS 8",
+    "P_MAX_CORNERS 20",
+    "P_E_MAX_POINTS 16",
+    "P_KR_HYPOTHESES 8",
+    "P_DETECT_STRIPS 3",
+    "P_REPLENISH_FRACTION 0.7"
+   ],
+   "public": {
+    "sim3_ate_mean_m": 0.4656,
+    "fuel_per_frame_max": 2846765,
+    "fuel_per_frame_median": 1998116.5,
+    "completed": 10
+   }
+  },
+  "e5_strip3_c24": {
+   "overrides": [
+    "P_BIAS_BASELINE 30",
+    "P_FAST_GRAY -1",
+    "P_MIN_TRACKS 12",
+    "P_MIN_INLIERS 8",
+    "P_MAX_CORNERS 20",
+    "P_E_MAX_POINTS 16",
+    "P_KR_HYPOTHESES 8",
+    "P_DETECT_STRIPS 3",
+    "P_MAX_CORNERS 24",
+    "P_E_MAX_POINTS 20"
+   ],
+   "public": {
+    "sim3_ate_mean_m": 1.5043,
+    "fuel_per_frame_max": 2589316,
+    "fuel_per_frame_median": 1347092.0,
+    "completed": 10
+   }
+  },
+  "e6_strip4_rf09": {
+   "overrides": [
+    "P_BIAS_BASELINE 30",
+    "P_FAST_GRAY -1",
+    "P_MIN_TRACKS 12",
+    "P_MIN_INLIERS 8",
+    "P_MAX_CORNERS 20",
+    "P_E_MAX_POINTS 16",
+    "P_KR_HYPOTHESES 8",
+    "P_DETECT_STRIPS 4",
+    "P_REPLENISH_FRACTION 0.9"
+   ],
+   "public": {
+    "sim3_ate_mean_m": 0.4742,
+    "fuel_per_frame_max": 3028739,
+    "fuel_per_frame_median": 2161471.5,
+    "completed": 10
+   }
+  },
+  "k1_e8_c16": {
+   "overrides": [
+    "P_SCALE 0.125",
+    "P_FAST_GRAY -1",
+    "P_BIAS_BASELINE 30",
+    "P_MIN_DISTANCE 2.0",
+    "P_LK_WIN 5",
+    "P_DETECT_STRIPS 3",
+    "P_MAX_CORNERS 16",
+    "P_E_MAX_POINTS 16",
+    "P_KR_HYPOTHESES 8",
+    "P_MIN_TRACKS 8",
+    "P_MIN_INLIERS 6"
+   ],
+   "public": {
+    "sim3_ate_mean_m": 0.6477,
+    "fuel_per_frame_max": 1436972,
+    "fuel_per_frame_median": 1087407.0,
+    "completed": 10
+   }
+  },
+  "k2_e8_c16_r2": {
+   "overrides": [
+    "P_SCALE 0.125",
+    "P_FAST_GRAY -1",
+    "P_BIAS_BASELINE 30",
+    "P_MIN_DISTANCE 2.0",
+    "P_LK_WIN 5",
+    "P_DETECT_STRIPS 3",
+    "P_GRAY_ROWS_8 2",
+    "P_MAX_CORNERS 16",
+    "P_E_MAX_POINTS 16",
+    "P_KR_HYPOTHESES 8",
+    "P_MIN_TRACKS 8",
+    "P_MIN_INLIERS 6"
+   ],
+   "public": {
+    "sim3_ate_mean_m": 0.674,
+    "fuel_per_frame_max": 995199,
+    "fuel_per_frame_median": 657327.0,
+    "completed": 10
+   }
+  },
+  "k3_e8_c24": {
+   "overrides": [
+    "P_SCALE 0.125",
+    "P_FAST_GRAY -1",
+    "P_BIAS_BASELINE 30",
+    "P_MIN_DISTANCE 2.0",
+    "P_LK_WIN 5",
+    "P_DETECT_STRIPS 3",
+    "P_MAX_CORNERS 24",
+    "P_E_MAX_POINTS 20",
+    "P_KR_HYPOTHESES 8",
+    "P_MIN_TRACKS 10",
+    "P_MIN_INLIERS 7"
+   ],
+   "public": {
+    "sim3_ate_mean_m": 0.6316,
+    "fuel_per_frame_max": 1634326,
+    "fuel_per_frame_median": 1217387.5,
+    "completed": 10
+   }
+  },
+  "k4_r1_c12": {
+   "overrides": [
+    "P_SCALE 0.125",
+    "P_FAST_GRAY -1",
+    "P_GRAY_ROWS_8 1",
+    "P_BIAS_BASELINE 30",
+    "P_MIN_DISTANCE 2.0",
+    "P_LK_WIN 5",
+    "P_DETECT_STRIPS 3",
+    "P_MAX_CORNERS 12",
+    "P_E_MAX_POINTS 12",
+    "P_KR_HYPOTHESES 6",
+    "P_MIN_TRACKS 8",
+    "P_MIN_INLIERS 6"
+   ],
+   "public": {
+    "sim3_ate_mean_m": 1.4823,
+    "fuel_per_frame_max": 883137,
+    "fuel_per_frame_median": 510205.0,
+    "completed": 10
+   }
+  },
+  "k5_c16_it5": {
+   "overrides": [
+    "P_SCALE 0.125",
+    "P_FAST_GRAY -1",
+    "P_GRAY_ROWS_8 2",
+    "P_BIAS_BASELINE 30",
+    "P_MIN_DISTANCE 2.0",
+    "P_LK_WIN 5",
+    "P_DETECT_STRIPS 3",
+    "P_MAX_CORNERS 16",
+    "P_E_MAX_POINTS 16",
+    "P_KR_HYPOTHESES 8",
+    "P_MIN_TRACKS 8",
+    "P_MIN_INLIERS 6",
+    "P_LK_ITERS 5"
+   ],
+   "public": {
+    "sim3_ate_mean_m": 0.6379,
+    "fuel_per_frame_max": 934788,
+    "fuel_per_frame_median": 639736.0,
+    "completed": 10
+   }
+  },
+  "k6_c16_nostrip": {
+   "overrides": [
+    "P_SCALE 0.125",
+    "P_FAST_GRAY -1",
+    "P_GRAY_ROWS_8 2",
+    "P_BIAS_BASELINE 30",
+    "P_MIN_DISTANCE 2.0",
+    "P_LK_WIN 5",
+    "P_MAX_CORNERS 16",
+    "P_E_MAX_POINTS 16",
+    "P_KR_HYPOTHESES 8",
+    "P_MIN_TRACKS 8",
+    "P_MIN_INLIERS 6"
+   ],
+   "public": {
+    "sim3_ate_mean_m": 0.5897,
+    "fuel_per_frame_max": 1220798,
+    "fuel_per_frame_median": 701401.5,
+    "completed": 10
+   }
+  },
+  "k7_c16_rf07": {
+   "overrides": [
+    "P_SCALE 0.125",
+    "P_FAST_GRAY -1",
+    "P_GRAY_ROWS_8 2",
+    "P_BIAS_BASELINE 30",
+    "P_MIN_DISTANCE 2.0",
+    "P_LK_WIN 5",
+    "P_DETECT_STRIPS 3",
+    "P_MAX_CORNERS 16",
+    "P_E_MAX_POINTS 16",
+    "P_KR_HYPOTHESES 8",
+    "P_MIN_TRACKS 8",
+    "P_MIN_INLIERS 6",
+    "P_REPLENISH_FRACTION 0.7"
+   ],
+   "public": {
+    "sim3_ate_mean_m": 0.5243,
+    "fuel_per_frame_max": 1209149,
+    "fuel_per_frame_median": 804598.0,
+    "completed": 10
+   },
+   "heldout": {
+    "sim3_ate_mean_m": 0.6121,
+    "fuel_per_frame_max": 1277291,
+    "fuel_per_frame_median": 797994.5,
+    "completed": 8
+   }
+  },
+  "k8_c16_w7": {
+   "overrides": [
+    "P_SCALE 0.125",
+    "P_FAST_GRAY -1",
+    "P_GRAY_ROWS_8 2",
+    "P_BIAS_BASELINE 30",
+    "P_MIN_DISTANCE 2.0",
+    "P_LK_WIN 5",
+    "P_DETECT_STRIPS 3",
+    "P_MAX_CORNERS 16",
+    "P_E_MAX_POINTS 16",
+    "P_KR_HYPOTHESES 8",
+    "P_MIN_TRACKS 8",
+    "P_MIN_INLIERS 6",
+    "P_LK_WIN 7"
+   ],
+   "public": {
+    "sim3_ate_mean_m": 0.6499,
+    "fuel_per_frame_max": 1479944,
+    "fuel_per_frame_median": 851358.5,
+    "completed": 10
+   }
+  },
+  "k9_c16_nobias": {
+   "overrides": [
+    "P_SCALE 0.125",
+    "P_FAST_GRAY -1",
+    "P_GRAY_ROWS_8 2",
+    "P_BIAS_BASELINE 30",
+    "P_MIN_DISTANCE 2.0",
+    "P_LK_WIN 5",
+    "P_DETECT_STRIPS 3",
+    "P_BIAS_BASELINE 0",
+    "P_MAX_CORNERS 16",
+    "P_E_MAX_POINTS 16",
+    "P_KR_HYPOTHESES 8",
+    "P_MIN_TRACKS 8",
+    "P_MIN_INLIERS 6"
+   ],
+   "public": {
+    "sim3_ate_mean_m": 0.6582,
+    "fuel_per_frame_max": 983605,
+    "fuel_per_frame_median": 650501.5,
+    "completed": 10
+   }
+  },
+  "m1_rf07_it5": {
+   "overrides": [
+    "P_SCALE 0.125",
+    "P_FAST_GRAY -1",
+    "P_GRAY_ROWS_8 2",
+    "P_BIAS_BASELINE 30",
+    "P_MIN_DISTANCE 2.0",
+    "P_LK_WIN 5",
+    "P_E_MAX_POINTS 16",
+    "P_KR_HYPOTHESES 8",
+    "P_MIN_TRACKS 8",
+    "P_MIN_INLIERS 6",
+    "P_DETECT_STRIPS 3",
+    "P_MAX_CORNERS 16",
+    "P_REPLENISH_FRACTION 0.7",
+    "P_LK_ITERS 5"
+   ],
+   "public": {
+    "sim3_ate_mean_m": 0.5993,
+    "fuel_per_frame_max": 1124469,
+    "fuel_per_frame_median": 767148.0,
+    "completed": 10
+   }
+  },
+  "m2_rf07_ns": {
+   "overrides": [
+    "P_SCALE 0.125",
+    "P_FAST_GRAY -1",
+    "P_GRAY_ROWS_8 2",
+    "P_BIAS_BASELINE 30",
+    "P_MIN_DISTANCE 2.0",
+    "P_LK_WIN 5",
+    "P_E_MAX_POINTS 16",
+    "P_KR_HYPOTHESES 8",
+    "P_MIN_TRACKS 8",
+    "P_MIN_INLIERS 6",
+    "P_MAX_CORNERS 16",
+    "P_REPLENISH_FRACTION 0.7"
+   ],
+   "public": {
+    "sim3_ate_mean_m": 0.5755,
+    "fuel_per_frame_max": 1472117,
+    "fuel_per_frame_median": 816359.5,
+    "completed": 10
+   }
+  },
+  "m3_rf085": {
+   "overrides": [
+    "P_SCALE 0.125",
+    "P_FAST_GRAY -1",
+    "P_GRAY_ROWS_8 2",
+    "P_BIAS_BASELINE 30",
+    "P_MIN_DISTANCE 2.0",
+    "P_LK_WIN 5",
+    "P_E_MAX_POINTS 16",
+    "P_KR_HYPOTHESES 8",
+    "P_MIN_TRACKS 8",
+    "P_MIN_INLIERS 6",
+    "P_DETECT_STRIPS 3",
+    "P_MAX_CORNERS 16",
+    "P_REPLENISH_FRACTION 0.85"
+   ],
+   "public": {
+    "sim3_ate_mean_m": 0.5334,
+    "fuel_per_frame_max": 1309685,
+    "fuel_per_frame_median": 859017.0,
+    "completed": 10
+   }
+  },
+  "m4_rf07_c20": {
+   "overrides": [
+    "P_SCALE 0.125",
+    "P_FAST_GRAY -1",
+    "P_GRAY_ROWS_8 2",
+    "P_BIAS_BASELINE 30",
+    "P_MIN_DISTANCE 2.0",
+    "P_LK_WIN 5",
+    "P_E_MAX_POINTS 16",
+    "P_KR_HYPOTHESES 8",
+    "P_MIN_TRACKS 8",
+    "P_MIN_INLIERS 6",
+    "P_DETECT_STRIPS 3",
+    "P_MAX_CORNERS 20",
+    "P_E_MAX_POINTS 20",
+    "P_REPLENISH_FRACTION 0.7"
+   ],
+   "public": {
+    "sim3_ate_mean_m": 0.5435,
+    "fuel_per_frame_max": 1380975,
+    "fuel_per_frame_median": 881898.5,
+    "completed": 10
+   }
+  },
+  "m5_rf07_s2": {
+   "overrides": [
+    "P_SCALE 0.125",
+    "P_FAST_GRAY -1",
+    "P_GRAY_ROWS_8 2",
+    "P_BIAS_BASELINE 30",
+    "P_MIN_DISTANCE 2.0",
+    "P_LK_WIN 5",
+    "P_E_MAX_POINTS 16",
+    "P_KR_HYPOTHESES 8",
+    "P_MIN_TRACKS 8",
+    "P_MIN_INLIERS 6",
+    "P_DETECT_STRIPS 2",
+    "P_MAX_CORNERS 16",
+    "P_REPLENISH_FRACTION 0.7"
+   ],
+   "public": {
+    "sim3_ate_mean_m": 0.6304,
+    "fuel_per_frame_max": 1251252,
+    "fuel_per_frame_median": 803712.0,
+    "completed": 10
+   }
+  },
+  "m6_rf07_it5_ns": {
+   "overrides": [
+    "P_SCALE 0.125",
+    "P_FAST_GRAY -1",
+    "P_GRAY_ROWS_8 2",
+    "P_BIAS_BASELINE 30",
+    "P_MIN_DISTANCE 2.0",
+    "P_LK_WIN 5",
+    "P_E_MAX_POINTS 16",
+    "P_KR_HYPOTHESES 8",
+    "P_MIN_TRACKS 8",
+    "P_MIN_INLIERS 6",
+    "P_MAX_CORNERS 16",
+    "P_REPLENISH_FRACTION 0.7",
+    "P_LK_ITERS 5"
+   ],
+   "public": {
+    "sim3_ate_mean_m": 0.5935,
+    "fuel_per_frame_max": 1395280,
+    "fuel_per_frame_median": 779324.5,
+    "completed": 10
+   }
+  },
+  "n1_rf07": {
+   "overrides": [
+    "P_BIAS_BASELINE 30",
+    "P_FAST_GRAY -1",
+    "P_MIN_TRACKS 12",
+    "P_MIN_INLIERS 8",
+    "P_MAX_CORNERS 20",
+    "P_E_MAX_POINTS 16",
+    "P_KR_HYPOTHESES 8",
+    "P_REPLENISH_FRACTION 0.7"
+   ],
+   "public": {
+    "sim3_ate_mean_m": 0.4246,
+    "fuel_per_frame_max": 3880802,
+    "fuel_per_frame_median": 2016834.5,
+    "completed": 10
+   }
+  },
+  "n2_rf07_s3": {
+   "overrides": [
+    "P_BIAS_BASELINE 30",
+    "P_FAST_GRAY -1",
+    "P_MIN_TRACKS 12",
+    "P_MIN_INLIERS 8",
+    "P_MAX_CORNERS 20",
+    "P_E_MAX_POINTS 16",
+    "P_KR_HYPOTHESES 8",
+    "P_REPLENISH_FRACTION 0.7",
+    "P_DETECT_STRIPS 3"
+   ],
+   "public": {
+    "sim3_ate_mean_m": 0.4656,
+    "fuel_per_frame_max": 2846765,
+    "fuel_per_frame_median": 1998116.5,
+    "completed": 10
+   }
+  },
+  "n3_it5": {
+   "overrides": [
+    "P_BIAS_BASELINE 30",
+    "P_FAST_GRAY -1",
+    "P_MIN_TRACKS 12",
+    "P_MIN_INLIERS 8",
+    "P_MAX_CORNERS 20",
+    "P_E_MAX_POINTS 16",
+    "P_KR_HYPOTHESES 8",
+    "P_LK_ITERS 5"
+   ],
+   "public": {
+    "sim3_ate_mean_m": 0.4007,
+    "fuel_per_frame_max": 3346712,
+    "fuel_per_frame_median": 1905988.0,
+    "completed": 10
+   }
+  },
+  "n4_rf085_s3": {
+   "overrides": [
+    "P_BIAS_BASELINE 30",
+    "P_FAST_GRAY -1",
+    "P_MIN_TRACKS 12",
+    "P_MIN_INLIERS 8",
+    "P_MAX_CORNERS 20",
+    "P_E_MAX_POINTS 16",
+    "P_KR_HYPOTHESES 8",
+    "P_REPLENISH_FRACTION 0.85",
+    "P_DETECT_STRIPS 3"
+   ],
+   "public": {
+    "sim3_ate_mean_m": 0.4054,
+    "fuel_per_frame_max": 3018227,
+    "fuel_per_frame_median": 2122901.0,
+    "completed": 10
+   },
+   "heldout": {
+    "sim3_ate_mean_m": 0.417,
+    "fuel_per_frame_max": 3110075,
+    "fuel_per_frame_median": 2113582.5,
+    "completed": 8
+   }
+  },
+  "n5_c30_rf07_s3": {
+   "overrides": [
+    "P_BIAS_BASELINE 30",
+    "P_FAST_GRAY -1",
+    "P_MIN_TRACKS 12",
+    "P_MIN_INLIERS 8",
+    "P_MAX_CORNERS 20",
+    "P_E_MAX_POINTS 16",
+    "P_KR_HYPOTHESES 8",
+    "P_MAX_CORNERS 30",
+    "P_E_MAX_POINTS 20",
+    "P_REPLENISH_FRACTION 0.7",
+    "P_DETECT_STRIPS 3"
+   ],
+   "public": {
+    "sim3_ate_mean_m": 0.4647,
+    "fuel_per_frame_max": 3480737,
+    "fuel_per_frame_median": 2413350.5,
+    "completed": 10
+   }
+  },
+  "n6_b40": {
+   "overrides": [
+    "P_BIAS_BASELINE 30",
+    "P_FAST_GRAY -1",
+    "P_MIN_TRACKS 12",
+    "P_MIN_INLIERS 8",
+    "P_MAX_CORNERS 20",
+    "P_E_MAX_POINTS 16",
+    "P_KR_HYPOTHESES 8",
+    "P_BIAS_BASELINE 40"
+   ],
+   "public": {
+    "sim3_ate_mean_m": 0.419,
+    "fuel_per_frame_max": 3395251,
+    "fuel_per_frame_median": 1909144.0,
+    "completed": 10
+   }
+  },
+  "tr_d2": {
+   "overrides": [
+    "P_TRACE 1",
+    "P_BIAS_BASELINE 30",
+    "P_FAST_GRAY -1",
+    "P_MIN_TRACKS 12",
+    "P_MIN_INLIERS 8",
+    "P_MAX_CORNERS 20",
+    "P_E_MAX_POINTS 16",
+    "P_KR_HYPOTHESES 8"
+   ],
+   "public": {
+    "sim3_ate_mean_m": 0.3887,
+    "fuel_per_frame_max": 3401296,
+    "fuel_per_frame_median": 1913600.0,
+    "completed": 1
+   }
+  }
+ },
+ "recommended": {
+  "main": "n4_rf085_s3",
+  "low_fuel": "k7_c16_rf07",
+  "estimated_area_pct": {
+   "public": 3.64,
+   "heldout_based": 3.39
+  }
+ }
+}

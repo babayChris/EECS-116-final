@@ -12,3 +12,4 @@ outputs/
 *.npz
 .env
 .env.*
+native/*/build/

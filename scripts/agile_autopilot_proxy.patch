@@ -1,0 +1,17 @@
+diff --git a/viobench/tools/datasets/generate/hyperdrone_world.h.in b/viobench/tools/datasets/generate/hyperdrone_world.h.in
+index 20c7155..8c084ab 100644
+--- a/viobench/tools/datasets/generate/hyperdrone_world.h.in
++++ b/viobench/tools/datasets/generate/hyperdrone_world.h.in
+@@ -45,6 +45,12 @@ namespace hyperdrone_user {
+         static constexpr TI FRAME_STRIDE = 1;  // render at the IMU rate; frames are subsampled in Python
+         static constexpr TI NUM_WAYPOINTS = @WAYPOINTS@;  // route length (the route cycles when exhausted); scaled with the duration
+         static constexpr TI INITIALIZATION_HOLD_STEPS = @HOLD_STEPS@;  // hover before the route starts
++        // LOCAL PROXY FOR STAGE 2 (not upstream): a more agile autopilot
++        static constexpr T CRUISE_SPEED_MIN = 0.8;
++        static constexpr T CRUISE_SPEED_MAX = 1.6;
++        static constexpr T MAX_ACCELERATION = 2.5;
++        static constexpr T MAX_JERK = 8.0;
++        static constexpr T MAX_YAW_RATE = 2.0;
+     };
+     using WORLD = hyperdrone::tasks::visual_inertial_localization::World<TASK_SPEC>;
+ }

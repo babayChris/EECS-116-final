@@ -35,7 +35,14 @@ Stage 2 options (off by default):
   direction_smoothing  constant_speed only: weight in [0, 1) of the previous world direction in an exponential
                    average with the new one (0: none)
   speed_model      constant_speed only: "constant" (default) or "flow": step length scaled by
-                   (derotated image motion / its running average) ** speed_flow_alpha, clipped to speed_flow_clip
+                   (derotated image motion / its running average) ** speed_flow_alpha, clipped to speed_flow_clip;
+                   or "metric": speed from a sliding-window least-squares fit of the IMU velocity changes to the
+                   visual directions. Over the last metric_window_s seconds, s_k d_k = c + V_k + b (t_k - t_now)
+                   for every frame k with a direction d_k, where V_k is the integrated IMU velocity change and the
+                   unknowns are the speeds s_k, the start velocity c and a constant world-frame bias b (accelerometer
+                   bias and tilt leakage of gravity). metric_smooth ties neighbouring speeds, metric_prior pulls them
+                   weakly toward the current estimate (straight, steady flight carries no scale information). The
+                   newest speed, clipped to metric_clip, updates the estimate with weight metric_alpha.
   tilt_tau         if set, roll and pitch are pulled toward the long-run average of the specific force (world frame)
                    with this time constant (s); on a multirotor the accelerometer shows gravity only on average
   track_mode       "redetect" (upstream: new corners every frame) or "persist": tracks are kept and topped up with
@@ -102,6 +109,34 @@ REPLENISH_FRACTION = float(PARAMS.get("replenish_fraction", 0.7))
 RNG_SEED = int(PARAMS.get("rng_seed", 0))
 LK_FB_PX = PARAMS.get("lk_fb_px")
 BASELINE_FRAMES = int(PARAMS.get("baseline_frames", 1))
+METRIC_WINDOW_S = float(PARAMS.get("metric_window_s", 2.0))
+METRIC_SMOOTH = float(PARAMS.get("metric_smooth", 1.0))
+METRIC_PRIOR = float(PARAMS.get("metric_prior", 0.1))
+METRIC_BIAS = bool(PARAMS.get("metric_bias", True))
+METRIC_MIN_DIRECTIONS = int(PARAMS.get("metric_min_directions", 8))
+METRIC_MAX_DIRECTIONS = int(PARAMS.get("metric_max_directions", 48))
+METRIC_ALPHA = float(PARAMS.get("metric_alpha", 0.3))
+METRIC_CLIP = tuple(PARAMS.get("metric_clip", [0.05, 4.0]))
+METRIC_ANCHOR = PARAMS.get("metric_anchor", "estimate")  # prior target: "estimate" (current) or "prior" (speed_prior)
+METRIC_BIAS_WEIGHT = float(PARAMS.get("metric_bias_weight", 0.0))  # ridge on the bias (per s^2 of window)
+BIAS_BASELINE = int(PARAMS.get("bias_baseline_frames", 0))  # 0: off; else frames between the views compared
+BIAS_GAIN = float(PARAMS.get("bias_gain", 0.05))
+BIAS_ATTITUDE_GAIN = float(PARAMS.get("bias_attitude_gain", 0.0))
+BIAS_RIDGE = float(PARAMS.get("bias_ridge", 1e-6))
+BIAS_MAX_STEP = float(PARAMS.get("bias_max_step_dps", 0.2))  # cap per update (deg/s)
+LM_MIN_PARALLAX_DEG = float(PARAMS.get("lm_min_parallax_deg", 3.0))  # speed_model landmark: triangulation gate
+LM_MIN_POINTS = int(PARAMS.get("lm_min_points", 8))
+LM_ALPHA = float(PARAMS.get("lm_alpha", 0.3))  # weight of the new speed measurement in the running estimate
+LM_CLIP = tuple(PARAMS.get("lm_clip", [0.25, 4.0]))  # measured / running speed ratio bounds
+LM_RESIDUAL = float(PARAMS.get("lm_residual", 2.0))
+LM_NORMALIZE_TAU = PARAMS.get("lm_normalize_tau")
+LM_SHADOW = bool(PARAMS.get("lm_shadow", False))  # landmarks live on a constant-speed shadow trajectory (open loop)
+LM_BETA = float(PARAMS.get("lm_beta", 0.5))  # shadow: speed = speed_prior * (smoothed measurement / long-run mean) ** beta
+LM_TAU = float(PARAMS.get("lm_tau", 10.0))  # s: output speed_prior * (speed / its long-run geometric mean)  # outlier gate on per-point step estimates, in median abs deviations
+TURN_A = float(PARAMS.get("turn_a", 1.33))  # speed_model turn: speed_prior * clip(turn_a + turn_b * |w|, turn_clip)
+TURN_B = float(PARAMS.get("turn_b", -1.65))  # |w|: bias-corrected gyro magnitude (rad/s), averaged over turn_tau
+TURN_TAU = float(PARAMS.get("turn_tau", 1.0))
+TURN_CLIP = tuple(PARAMS.get("turn_clip", [0.3, 1.5]))
 PROBE = PARAMS.get("probe")  # measurement only: "imu_only" skips all vision work (fuel floor of the rest)
 
 
@@ -151,6 +186,13 @@ class Solution:
         self.ids = None  # identity of each entry of previous_points
         self.id_counter = 0
         self.history = []  # (ids, points, R_wc) of recent frames, for baseline_frames > 1
+        self.metric_velocity = np.zeros(3)  # integrated IMU velocity change since start (speed_model metric)
+        self.metric_window = []  # (t_mid, velocity change at mid-interval, world direction or None)
+        self.metric_speed = SPEED_PRIOR
+        self.lm_birth = {}  # track id -> (world bearing, camera centre) at the first observation
+        self.lm_points = {}  # track id -> triangulated world point (trajectory scale)
+        self.lm_speed = SPEED_PRIOR
+        self.lm_used = 0
         if warm:
             self._warmup(config)
 
@@ -401,11 +443,22 @@ class Solution:
             return self._state()
 
         R_wb_before = self.R_wb.copy()
+        v_before = self.v.copy()
+        if SPEED_MODEL == "turn" and len(imu):
+            rate = float(np.linalg.norm(imu[:, 4:7] - self.gyro_bias, axis=1).mean())
+            span = max(imu[-1, 0] - imu[0, 0], 1e-3) * len(imu) / max(len(imu) - 1, 1)
+            a = min(span / TURN_TAU, 1.0)
+            self.turn_rate = rate if not hasattr(self, "turn_rate") else (1 - a) * self.turn_rate + a * rate
         displacement_imu = self._integrate_vectorized(imu) if IMU_VECTORIZED else self._integrate(imu)
         R_c1_c0 = (self.R_wb @ self.R_bc).T @ (R_wb_before @ self.R_bc)
         self.last_flow = None
         direction_camera = None if PROBE == "imu_only" else self._track(frame, R_c1_c0)
         dt = max(imu[-1, 0] - imu[0, 0] + (imu[1, 0] - imu[0, 0] if len(imu) > 1 else 0.0), 1e-3) if len(imu) else 0.05
+        if SPEED_MODEL == "metric":
+            dv = self.v - v_before
+            t_mid = (imu[-1, 0] if len(imu) else t) - 0.5 * dt
+            velocity_mid = self.metric_velocity + 0.5 * dv
+            self.metric_velocity = self.metric_velocity + dv
         if direction_camera is not None:
             R_wc_previous = R_wb_before @ self.R_bc
             direction_world = R_wc_previous @ direction_camera
@@ -434,6 +487,13 @@ class Solution:
                         self.flow_average = float(np.exp((1 - a) * np.log(self.flow_average) + a * np.log(rate)))
                     speed = SPEED_PRIOR * float(np.clip((rate / self.flow_average) ** SPEED_FLOW_ALPHA, *SPEED_FLOW_CLIP))
                     self.last_speed = speed
+                elif SPEED_MODEL == "turn":
+                    speed = self.last_speed = self._turn_speed()
+                elif SPEED_MODEL == "landmark":
+                    speed = self.last_speed = self._landmark_speed(direction_world, displacement_imu, dt)
+                elif SPEED_MODEL == "metric":
+                    self._metric_push(t_mid, velocity_mid, direction_world)
+                    speed = self.last_speed = self._metric_fit()
                 displacement = speed * dt * direction_world
                 self.p += displacement - displacement_imu
                 self.v = displacement / dt
@@ -444,6 +504,10 @@ class Solution:
                 self.p += correction
                 self.v = 0.5 * self.v + 0.5 * displacement / dt
         elif FUSION == "constant_speed":
+            if SPEED_MODEL == "landmark" and LM_SHADOW and self.last_direction is not None and NO_VISION == "coast":
+                self.lm_shadow = self._camera_centre() + SPEED_PRIOR * dt * self.last_direction
+            if SPEED_MODEL == "metric":
+                self._metric_push(t_mid, velocity_mid, None)
             self.p -= displacement_imu
             if NO_VISION == "coast" and self.last_direction is not None:
                 speed = getattr(self, "last_speed", SPEED_PRIOR)
@@ -455,21 +519,173 @@ class Solution:
             self.v *= np.exp(-dt / float(SPEED_TAU))
         if TILT_TAU is not None and len(imu):
             self._correct_tilt(imu, dt)
+        if BIAS_BASELINE > 1 and PROBE != "imu_only":
+            self._update_gyro_bias()
+        if SPEED_MODEL == "landmark":
+            self._landmark_update()
         current_ids, current_points = self.next_ids, self.next_points
         self.previous_frame = frame.copy()
         if PROBE != "imu_only":
             self.previous_points = self._replenish(frame) if TRACK_MODE == "persist" else self._detect(frame)
-        if BASELINE_FRAMES > 1:
+        keep = max(BASELINE_FRAMES, BIAS_BASELINE)
+        if keep > 1:
             self.history.append((self.ids, None if self.previous_points is None else self.previous_points.reshape(-1, 2).copy(),
-                                 self.R_wb @ self.R_bc))
-            del self.history[:-BASELINE_FRAMES]
+                                 self.R_wb @ self.R_bc, self.last_t))
+            del self.history[:-keep]
         return self._state()
+
+    def _turn_speed(self):
+        """Multirotor trajectories slow down in turns: relative speed falls linearly with the smoothed turn rate."""
+        rate = getattr(self, "turn_rate", 0.0)
+        return SPEED_PRIOR * float(np.clip(TURN_A + TURN_B * rate, *TURN_CLIP))
+
+    def _world_bearings(self, points):
+        """Unit bearings in world axes of pixel points in the current frame."""
+        fx, fy, cx, cy = self.K[0, 0], self.K[1, 1], self.K[0, 2], self.K[1, 2]
+        x = np.column_stack([(points[:, 0] - cx) / fx, (points[:, 1] - cy) / fy, np.ones(len(points))])
+        b = x @ (self.R_wb @ self.R_bc).T
+        return b / np.linalg.norm(b, axis=1, keepdims=True)
+
+    def _camera_centre(self):
+        if LM_SHADOW:
+            return getattr(self, "lm_shadow", np.zeros(3))
+        return (self._pose_camera())[:3, 3]
+
+    def _landmark_speed(self, direction, displacement_imu, dt):
+        """Step length along `direction` that best re-projects the triangulated landmarks seen in this frame (rotation
+        known, centre c = c_prev + s d: cross(X - c_prev, b) = s cross(d, b) per landmark, least squares with a robust gate)."""
+        if LM_SHADOW:
+            shadow_prev = self._camera_centre()
+            self.lm_shadow = shadow_prev + SPEED_PRIOR * dt * direction
+        if self.next_ids is None or self.next_points is None or not self.lm_points:
+            return self.lm_speed
+        ids = self.next_ids
+        keep = [k for k, i in enumerate(ids) if int(i) in self.lm_points]
+        if len(keep) < LM_MIN_POINTS:
+            return self.lm_speed
+        b = self._world_bearings(self.next_points.reshape(-1, 2)[keep].astype(float))
+        X = np.array([self.lm_points[int(ids[k])] for k in keep])
+        # centre before this frame's motion: the IMU displacement was already added to p, remove it
+        c_prev = shadow_prev if LM_SHADOW else self._camera_centre() - displacement_imu
+        u = np.cross(direction, b)
+        r = np.cross(X - c_prev, b)
+        den = (u * u).sum(axis=1)
+        ok = den > 1e-8
+        if ok.sum() < LM_MIN_POINTS:
+            return self.lm_speed
+        s_each = (u[ok] * r[ok]).sum(axis=1) / den[ok]
+        w = den[ok]
+        med = np.median(s_each)
+        mad = np.median(np.abs(s_each - med)) + 1e-9
+        inl = np.abs(s_each - med) < LM_RESIDUAL * 1.4826 * mad
+        if inl.sum() < LM_MIN_POINTS:
+            return self.lm_speed
+        step = float((w[inl] * s_each[inl]).sum() / w[inl].sum())
+        self.lm_used += 1
+        if LM_SHADOW:
+            m = max(step / dt, 1e-3)
+            ema = getattr(self, "lm_ema", m)
+            ema = (1 - LM_ALPHA) * ema + LM_ALPHA * float(np.clip(m, LM_CLIP[0] * ema, LM_CLIP[1] * ema))
+            a = min(dt / LM_TAU, 1.0)
+            mean = float(np.exp((1 - a) * np.log(getattr(self, "lm_mean", ema)) + a * np.log(ema)))
+            self.lm_ema, self.lm_mean = ema, mean
+            self.lm_speed = SPEED_PRIOR * (ema / mean) ** LM_BETA
+            return self.lm_speed
+        if PARAMS.get("lm_open_loop"):
+            self.lm_measured = step / dt
+            return SPEED_PRIOR
+        if LM_NORMALIZE_TAU is None:
+            measured = float(np.clip(step / dt, LM_CLIP[0] * self.lm_speed, LM_CLIP[1] * self.lm_speed))
+            self.lm_speed = (1 - LM_ALPHA) * self.lm_speed + LM_ALPHA * measured
+            return self.lm_speed
+        # relative speed only: raw estimate over its long-run geometric mean, times speed_prior (anchors the scale)
+        raw = getattr(self, "lm_raw", step / dt)
+        measured = float(np.clip(step / dt, LM_CLIP[0] * raw, LM_CLIP[1] * raw))
+        raw = max((1 - LM_ALPHA) * raw + LM_ALPHA * measured, 1e-6)
+        a = min(dt / float(LM_NORMALIZE_TAU), 1.0)
+        mean = float(np.exp((1 - a) * np.log(getattr(self, "lm_mean", raw)) + a * np.log(raw)))
+        self.lm_raw, self.lm_mean = raw, mean
+        self.lm_speed = SPEED_PRIOR * raw / mean
+        return self.lm_speed
+
+    def _landmark_update(self):
+        """After this frame's pose: record first observations of new tracks and (re)triangulate tracks whose bearing
+        changed by at least lm_min_parallax_deg since their first observation (midpoint of the two rays)."""
+        if self.next_ids is None or self.next_points is None or len(self.next_ids) == 0:
+            return
+        c = self._camera_centre()
+        b = self._world_bearings(self.next_points.reshape(-1, 2).astype(float))
+        alive = set()
+        cos_gate = np.cos(np.radians(LM_MIN_PARALLAX_DEG))
+        for k, i in enumerate(self.next_ids):
+            i = int(i)
+            alive.add(i)
+            birth = self.lm_birth.get(i)
+            if birth is None:
+                self.lm_birth[i] = (b[k], c.copy())
+                continue
+            b0, c0 = birth
+            if float(b0 @ b[k]) > cos_gate:
+                continue
+            # closest points of the rays c0 + a b0 and c + e b
+            w0 = c0 - c
+            a11, a12, a22 = 1.0, float(b0 @ b[k]), 1.0
+            d1, d2 = float(b0 @ w0), float(b[k] @ w0)
+            den = a11 * a22 - a12 * a12
+            if den < 1e-9:
+                continue
+            a = (a12 * d2 - a22 * d1) / den
+            e = (a11 * d2 - a12 * d1) / den
+            if a <= 0 or e <= 0:
+                continue
+            self.lm_points[i] = 0.5 * ((c0 + a * b0) + (c + e * b[k]))
+        for store in (self.lm_birth, self.lm_points):
+            for i in list(store):
+                if i not in alive:
+                    del store[i]
+
+    def _metric_push(self, t_mid, velocity, direction):
+        self.metric_window.append((t_mid, velocity, direction))
+        while self.metric_window and self.metric_window[0][0] < t_mid - METRIC_WINDOW_S:
+            self.metric_window.pop(0)
+
+    def _metric_fit(self):
+        """Speed (m/s) at the newest frame from the sliding window; see speed_model "metric"."""
+        rows = [(t, v, d) for t, v, d in self.metric_window if d is not None][-METRIC_MAX_DIRECTIONS:]
+        m = len(rows)
+        if m < METRIC_MIN_DIRECTIONS:
+            return self.metric_speed
+        t_now, v_now = rows[-1][0], rows[-1][1]
+        extra = 6 if METRIC_BIAS else 3
+        ridge = 3 if METRIC_BIAS and METRIC_BIAS_WEIGHT > 0 else 0
+        A = np.zeros((3 * m + (m - 1) + m + ridge, m + extra))
+        y = np.zeros(A.shape[0])
+        for k, (t, v, d) in enumerate(rows):  # s_k d_k - c - b (t_k - t_now) = V_k - V_now
+            r = slice(3 * k, 3 * k + 3)
+            A[r, k] = d
+            A[r, m:m + 3] = -np.eye(3)
+            if METRIC_BIAS:
+                A[r, m + 3:m + 6] = -(t - t_now) * np.eye(3)
+            y[r] = v - v_now
+        o = 3 * m
+        idx = np.arange(m - 1)
+        A[o + idx, idx] = -METRIC_SMOOTH
+        A[o + idx, idx + 1] = METRIC_SMOOTH
+        o += m - 1
+        A[o + np.arange(m), np.arange(m)] = METRIC_PRIOR
+        y[o:o + m] = METRIC_PRIOR * (SPEED_PRIOR if METRIC_ANCHOR == "prior" else self.metric_speed)
+        if ridge:
+            A[o + m + np.arange(3), m + 3 + np.arange(3)] = METRIC_BIAS_WEIGHT
+        x = np.linalg.lstsq(A, y, rcond=None)[0]
+        s = float(np.clip(x[m - 1], *METRIC_CLIP))
+        self.metric_speed = (1 - METRIC_ALPHA) * self.metric_speed + METRIC_ALPHA * s
+        return self.metric_speed
 
     def _direction_multiframe(self):
         """World direction of motion from the frame baseline_frames ago to now, using tracks seen in both."""
         if len(self.history) < BASELINE_FRAMES or self.next_ids is None or self.next_points is None:
             return None
-        ids_then, points_then, R_wc_then = self.history[0]
+        ids_then, points_then, R_wc_then = self.history[-BASELINE_FRAMES][:3]
         if ids_then is None or points_then is None:
             return None
         common, i_then, i_now = np.intersect1d(ids_then, self.next_ids, return_indices=True)
@@ -486,6 +702,62 @@ class Solution:
             return None
         d = R_wc_then @ d
         return d / max(np.linalg.norm(d), 1e-12)
+
+    def _common_tracks(self, entry):
+        ids_then, points_then = entry[0], entry[1]
+        if ids_then is None or points_then is None or self.next_ids is None or self.next_points is None:
+            return None
+        common, i_then, i_now = np.intersect1d(ids_then, self.next_ids, return_indices=True)
+        if len(common) < MIN_TRACKS:
+            return None
+        return points_then[i_then].astype(float), self.next_points.reshape(-1, 2)[i_now].astype(float)
+
+    def _update_gyro_bias(self):
+        """Compare the gyro rotation over bias_baseline_frames with the rotation that best explains the tracks seen in
+        both views (translation direction and a small rotation correction delta, alternately), and move the gyro bias
+        toward delta / elapsed time. delta is in camera-1 axes: R_true = exp(delta) R_gyro, so the bias error is R_bc delta / T."""
+        if len(self.history) < BIAS_BASELINE:
+            return
+        entry = self.history[-BIAS_BASELINE]
+        pair = self._common_tracks(entry)
+        if pair is None:
+            return
+        p0, p1 = pair
+        R_wc_then, t_then = entry[2], entry[3]
+        elapsed = self.last_t - t_then
+        if elapsed <= 0:
+            return
+        R = (self.R_wb @ self.R_bc).T @ R_wc_then
+        fx, fy, cx, cy = self.K[0, 0], self.K[1, 1], self.K[0, 2], self.K[1, 2]
+        n = len(p0)
+        x0 = np.column_stack([(p0[:, 0] - cx) / fx, (p0[:, 1] - cy) / fy, np.ones(n)])
+        x1 = np.column_stack([(p1[:, 0] - cx) / fx, (p1[:, 1] - cy) / fy, np.ones(n)])
+        threshold = KR_THRESHOLD_PX * SCALE / fx
+        delta = np.zeros(3)
+        for _ in range(2):
+            Rc = cv2.Rodrigues(delta)[0] @ R
+            d = self._direction_known_rotation(p0, p1, Rc)
+            if d is None:
+                return
+            t = -Rc @ d
+            r0 = x0 @ Rc.T
+            A = np.cross(r0, x1)
+            lines = np.cross(t, r0)
+            w = 1.0 / np.maximum(np.sqrt(lines[:, 0] ** 2 + lines[:, 1] ** 2), 1e-12)
+            mask = np.abs(A @ t) * w < 3 * threshold
+            if int(mask.sum()) < MIN_INLIERS:
+                return
+            g = np.cross(r0, np.cross(x1, t)) * w[:, None]
+            e = (A @ t) * w
+            G, E = g[mask], e[mask]
+            step = -np.linalg.solve(G.T @ G + BIAS_RIDGE * np.eye(3), G.T @ E)
+            delta = delta + step
+        error = self.R_bc @ delta / elapsed
+        cap = np.radians(BIAS_MAX_STEP)
+        update = np.clip(BIAS_GAIN * error, -cap, cap)
+        self.gyro_bias = self.gyro_bias + update
+        if BIAS_ATTITUDE_GAIN > 0:
+            self.R_wb = self.R_wb @ cv2.Rodrigues(-BIAS_ATTITUDE_GAIN * (self.R_bc @ delta) / BIAS_BASELINE)[0]
 
     def _correct_tilt(self, imu, dt):
         """Rotate R_wb by a small world-frame rotation moving the specific force of this frame toward +z."""
