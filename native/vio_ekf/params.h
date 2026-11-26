@@ -209,3 +209,9 @@
 #ifndef P_VI_TILT
 #define P_VI_TILT 0.05      // tilt std after the initialization (rad)
 #endif
+#ifndef P_MAX_CAND
+#define P_MAX_CAND 100      // features tried per update (triangulation cost bound)
+#endif
+#ifndef P_SLAM_INIT_MAX
+#define P_SLAM_INIT_MAX 100 // new SLAM points per update
+#endif

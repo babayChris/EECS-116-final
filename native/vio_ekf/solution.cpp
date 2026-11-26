@@ -1124,14 +1124,18 @@ struct Estimator {
     void update_with(const int* idx, int count, bool apply = true) {
         int rows = 0, used = 0;
         double depth_sum = 0; int depth_n = 0;
-        for (int q = 0; q < count && used < P_MAX_UPDATE_FEAT; q++) {
+        int tried = 0, slam_new = 0;
+        for (int q = 0; q < count && used < P_MAX_UPDATE_FEAT && tried < P_MAX_CAND; q++) {
             Feature& f = feats[idx[q]];
             if (f.nobs < P_MIN_OBS) continue;
+            tried++;
             unsigned long long t_ = 0;
 #if !defined(__wasm__) && defined(P_PROF)
             t_ = __rdtsc();
 #endif
-            const int got = feature_rows(f, rows, f.alive && f.slam < 0);
+            const int before_slam = nslam;
+            const int got = feature_rows(f, rows, f.alive && f.slam < 0 && slam_new < P_SLAM_INIT_MAX);
+            slam_new += nslam - before_slam;
 #if !defined(__wasm__) && defined(P_PROF)
             prof_acc[3] += __rdtsc() - t_;
 #endif
