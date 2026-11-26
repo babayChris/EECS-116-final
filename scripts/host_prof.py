@@ -18,7 +18,7 @@ for i, (t, frame, imu) in enumerate(e.steps(frames)):
     lib.debug_prof(d.ctypes.data); rows.append(d.copy())
 rows = np.array(rows) / 1e3
 tot = rows.sum(1)
-names = ["prop", "track", "detect", "rows", "ekf"]
+names = ["prop", "track", "detect", "rows", "ekf", "tri", "chi2", "qr"]
 print("median kcycles:", {n: round(float(np.median(rows[:, i])), 1) for i, n in enumerate(names)})
 for i in np.argsort(-tot)[:6]:
     print(f"frame {i}: total {tot[i]:.0f} k  " + " ".join(f"{n} {rows[i, j]:.0f}" for j, n in enumerate(names)))

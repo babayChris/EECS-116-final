@@ -43,6 +43,40 @@ inline double dotd(const double* a, const double* b, int n) {
     return r;
 #endif
 }
+inline float dotf(const float* a, const float* b, int n) {
+#if defined(__wasm_simd128__) && !defined(P_SCALAR)
+    v128_t s0 = wasm_f32x4_splat(0), s1 = wasm_f32x4_splat(0);
+    int i = 0;
+    for (; i + 8 <= n; i += 8) {
+        s0 = wasm_f32x4_add(s0, wasm_f32x4_mul(wasm_v128_load(a + i), wasm_v128_load(b + i)));
+        s1 = wasm_f32x4_add(s1, wasm_f32x4_mul(wasm_v128_load(a + i + 4), wasm_v128_load(b + i + 4)));
+    }
+    if (i + 4 <= n) { s0 = wasm_f32x4_add(s0, wasm_f32x4_mul(wasm_v128_load(a + i), wasm_v128_load(b + i))); i += 4; }
+    s0 = wasm_f32x4_add(s0, s1);
+    float r = wasm_f32x4_extract_lane(s0, 0) + wasm_f32x4_extract_lane(s0, 1) + wasm_f32x4_extract_lane(s0, 2) + wasm_f32x4_extract_lane(s0, 3);
+    for (; i < n; i++) r += a[i] * b[i];
+    return r;
+#else
+    float r = 0;
+    for (int i = 0; i < n; i++) r += a[i] * b[i];
+    return r;
+#endif
+}
+inline void axpyf(float* y, const float* x, float a, int n) {
+#if defined(__wasm_simd128__) && !defined(P_SCALAR)
+    const v128_t va = wasm_f32x4_splat(a);
+    int i = 0;
+    for (; i + 4 <= n; i += 4) wasm_v128_store(y + i, wasm_f32x4_add(wasm_v128_load(y + i), wasm_f32x4_mul(va, wasm_v128_load(x + i))));
+    for (; i < n; i++) y[i] += a * x[i];
+#else
+    for (int i = 0; i < n; i++) y[i] += a * x[i];
+#endif
+}
+inline double dotx(const double* a, const double* b, int n) { return dotd(a, b, n); }
+inline float dotx(const float* a, const float* b, int n) { return dotf(a, b, n); }
+inline void axpyd(double* y, const double* x, double a, int n);
+inline void axpyx(double* y, const double* x, double a, int n) { axpyd(y, x, a, n); }
+inline void axpyx(float* y, const float* x, float a, int n) { axpyf(y, x, a, n); }
 inline void axpyd(double* y, const double* x, double a, int n) {  // y += a x
 #if defined(__wasm_simd128__) && !defined(P_SCALAR)
     const v128_t va = wasm_f64x2_splat(a);
@@ -287,7 +321,12 @@ struct Feature {
 
 struct Clone { int id; M3 R; V3 p; };
 
-double P[NMAX][NMAX];
+#if P_FLOATCOV
+typedef float preal;
+#else
+typedef double preal;
+#endif
+preal P[NMAX][NMAX];
 
 struct Estimator {
     // calibration
@@ -352,7 +391,7 @@ struct Estimator {
             for (int i = 0; i < 3; i++) {
                 const double m0 = M.m[i][0], m1 = M.m[i][1], m2 = M.m[i][2];
                 double* out = tmp[r0 + i];
-                const double *a0 = P[c0], *a1 = P[c0 + 1], *a2 = P[c0 + 2];
+                const preal *a0 = P[c0], *a1 = P[c0 + 1], *a2 = P[c0 + 2];
                 for (int j = 0; j < n; j++) out[j] += m0 * a0[j] + m1 * a1[j] + m2 * a2[j];
             }
         }
@@ -449,7 +488,7 @@ struct Estimator {
         double h22inv = 0;
         double lambda = 1e-3;
         double cost_prev = 1e30;
-        for (int it = 0; it < 8; it++) {
+        for (int it = 0; it < P_TRI_ITERS; it++) {
             double Hm[3][3] = {}, bv[3] = {}, cost = 0;
             for (int k = 0; k < n; k++) {
                 const V3 a{al, be, 1};
@@ -527,6 +566,7 @@ struct Estimator {
         st_cand++;
         // well-observed points need no depth prior: project the whole point out (classic MSCKF); poorly observed ones
         // (little parallax) keep the inverse-depth prior
+        PROF_BEGIN();
         bool prior = P_RHO_SIGMA > 0;
         if (prior && P_PRIOR_SWITCH > 0 && triangulate(f, Pw, abr, &Ra, false) && abr[3] < P_PRIOR_SWITCH * abr[2]) {
             prior = false;
@@ -536,7 +576,8 @@ struct Estimator {
                 depth_est = std::exp(log_depth);
             }
         }
-        else if (!triangulate(f, Pw, abr, &Ra, prior)) { st_tri_fail++; return 0; }
+        else if (!triangulate(f, Pw, abr, &Ra, prior)) { st_tri_fail++; PROF_END(5); return 0; }
+        PROF_END(5);
         // dPw/d(al, be, rho) for the anchored inverse-depth parameters (anchor pose held at its estimate)
         const double id = 1.0 / abr[2];
         const V3 c0{Ra.m[0][0] * id, Ra.m[1][0] * id, Ra.m[2][0] * id};
@@ -629,13 +670,16 @@ struct Estimator {
                 d *= kw; for (int i = 0; i < mr; i++) r[i] += d * Hf[i][2];
             }
         }
-        if (P_CHI2) {
+        double r2 = 0;
+        for (int i = 0; i < mr; i++) r2 += r[i] * r[i];
+        PROF_BEGIN();
+        if (P_CHI2 && r2 > P_CHI2_FAST * mr * sig * sig) {
             // S = Hx Pcc Hx^T + sig^2 I over the involved clones; chi-square test on r
             int gidx[6 * MAX_OBS];
             for (int c = 0; c < nc; c++) gidx[c] = NI + 6 * slot[c / 6] + c % 6;
             double Pcc[6 * MAX_OBS][6 * MAX_OBS];
             for (int a2 = 0; a2 < nc; a2++) {
-                const double* Prow = P[gidx[a2]];
+                const preal* Prow = P[gidx[a2]];
                 for (int c = 0; c < nc; c++) Pcc[a2][c] = Prow[gidx[c]];
             }
             double HP[2 * MAX_OBS][6 * MAX_OBS];
@@ -664,8 +708,9 @@ struct Estimator {
                 chi += y[i] * y[i];
             }
             static const double chi2_95[] = {0, 3.84, 5.99, 7.81, 9.49, 11.07, 12.59, 14.07, 15.51, 16.92, 18.31, 19.68, 21.03, 22.36, 23.68, 25.0, 26.3, 27.59};
-            if (chi > P_CHI2_SCALE * chi2_95[std::min(mr, 17)]) { st_chi_fail++; return 0; }
+            if (chi > P_CHI2_SCALE * chi2_95[std::min(mr, 17)]) { st_chi_fail++; PROF_END(6); return 0; }
         }
+        PROF_END(6);
         f.has_pw = true; f.pw = Pw; f.sig_rho = abr[3];
         for (int i = 0; i < mr; i++) {
             for (int c = 0; c < 6 * (P_CLONES + 1); c++) Hs[row + i][c] = 0;
@@ -724,47 +769,57 @@ struct Estimator {
 
     void ekf_update(int m, int nc) {
         const int n = dim();
+        st_last_m = m;
         const double sig = P_SIGMA_PX / (fx * P_DS);
         constexpr int MR = MAX_ROWS > NMAX ? MAX_ROWS : NMAX;
-        static double PHt[NMAX][MR];
+        static preal PHt[NMAX][MR];
+        static preal Hf[MR][6 * (P_CLONES + 1)];
         static double S[MR][MR];
+        static preal Lf[MR][MR];
+        for (int j = 0; j < m; j++) for (int k = 0; k < nc; k++) Hf[j][k] = (preal)Hs[j][k];
         for (int i = 0; i < n; i++) {
-            const double* Pi = &P[i][NI];
-            for (int j = 0; j < m; j++) PHt[i][j] = dotd(Pi, Hs[j], nc);
+            const preal* Pi = &P[i][NI];
+            if (!(P_EKF_SKIP & 1)) for (int j = 0; j < m; j++) PHt[i][j] = dotx(Pi, Hf[j], nc);
         }
-        for (int i = 0; i < m; i++) {
-            double* Si = S[i];
-            for (int j = 0; j < m; j++) Si[j] = 0;
-            for (int k = 0; k < nc; k++) axpyd(Si, PHt[NI + k], Hs[i][k], m);
-            Si[i] += sig * sig;
+        {
+            static preal Sf[MR][MR];
+            for (int i = 0; i < m; i++) {
+                preal* Si = Sf[i];
+                for (int j = 0; j < m; j++) Si[j] = 0;
+                if (!(P_EKF_SKIP & 2)) for (int k = 0; k < nc; k++) axpyx(Si, PHt[NI + k], Hf[i][k], m);
+            }
+            for (int i = 0; i < m; i++) for (int j = 0; j <= i; j++) S[i][j] = 0.5 * ((double)Sf[i][j] + (double)Sf[j][i]) + (i == j ? sig * sig : 0);
         }
-        // Cholesky S = L L^T (in place, lower)
+        // Cholesky S = L L^T (in place, lower), in double
         for (int i = 0; i < m; i++)
             for (int j = 0; j <= i; j++) {
                 const double s = S[i][j] - dotd(S[i], S[j], j);
                 if (i == j) { if (s <= 1e-30) return; S[i][i] = std::sqrt(s); }
                 else S[i][j] = s / S[j][j];
             }
+        for (int i = 0; i < m; i++) for (int j = 0; j < m; j++) Lf[i][j] = j <= i ? (preal)S[i][j] : 0;
         // W = P H^T L^{-T} (one triangular solve per state), then P -= W W^T and dx = W L^{-1} r
-        static double Wm[NMAX][MR];
+        static preal Wm[NMAX][MR];
         double z[MR];
         for (int a2 = 0; a2 < m; a2++) z[a2] = (rs[a2] - dotd(S[a2], z, a2)) / S[a2][a2];
+        preal zf[MR];
+        for (int a2 = 0; a2 < m; a2++) zf[a2] = (preal)z[a2];
         double dx[NMAX];
         for (int i = 0; i < n; i++) {
-            double* w = Wm[i];
-            const double* ph = PHt[i];
-            for (int a2 = 0; a2 < m; a2++) w[a2] = (ph[a2] - dotd(S[a2], w, a2)) / S[a2][a2];
-            dx[i] = dotd(w, z, m);
+            preal* w = Wm[i];
+            const preal* ph = PHt[i];
+            if (!(P_EKF_SKIP & 4)) for (int a2 = 0; a2 < m; a2++) w[a2] = (ph[a2] - dotx(Lf[a2], w, a2)) / Lf[a2][a2];
+            dx[i] = dotx(w, zf, m);
         }
-        for (int i = 0; i < n; i++) {
-            const double* wi = Wm[i];
+        if (!(P_EKF_SKIP & 8)) for (int i = 0; i < n; i++) {
+            const preal* wi = Wm[i];
             for (int j = i; j < n; j++) {
-                const double val = P[i][j] - dotd(wi, Wm[j], m);
+                const preal val = P[i][j] - dotx(wi, Wm[j], m);
                 P[i][j] = val; P[j][i] = val;
             }
         }
         for (int i = 0; i < n; i++) if (P[i][i] < 1e-12) P[i][i] = 1e-12;
-        apply_correction(dx);
+        if (!(P_EKF_SKIP & 16)) apply_correction(dx);
     }
 
     // features with >= P_MIN_OBS observations in `ids` (feature indices) are used in one update
@@ -795,7 +850,8 @@ struct Estimator {
         apply_correction(dx);
     }
 
-    int pending_m = 0, pending_nc = 0;  // split update: rows computed at a clone frame, applied at the next frame
+    int pending_m = 0, pending_nc = 0;
+    int st_last_m = 0, st_last_rows = 0, st_last_ni = 0;  // split update: rows computed at a clone frame, applied at the next frame
 
     void update_with(const int* idx, int count, bool apply = true) {
         int rows = 0, used = 0;
@@ -816,7 +872,8 @@ struct Estimator {
         }
         if (rows == 0) return;
         const int nc = 6 * nclones;
-        rows = compress_rows(rows, nc);
+        st_last_rows = rows; st_last_ni = count;
+        PROF_BEGIN(); rows = compress_rows(rows, nc); PROF_END(7);
         if (apply) { PROF_BEGIN(); ekf_update(rows, nc); PROF_END(4); }
         else { pending_m = rows; pending_nc = nc; }
     }
@@ -861,7 +918,7 @@ struct Estimator {
     template <class F> void twice(int bit, F fn) {
         if (!(P_DOUBLE & bit)) return;
         static Estimator* saved = nullptr;
-        static double Psaved[NMAX][NMAX];
+        static preal Psaved[NMAX][NMAX];
         if (!saved) saved = (Estimator*)std::malloc(sizeof(Estimator));
         std::memcpy((void*)saved, (const void*)this, sizeof(Estimator));
         std::memcpy(Psaved, P, sizeof(P));
@@ -876,15 +933,18 @@ struct Estimator {
             init_state(imu, count);
             t_last = t;
             add_clone();
-            detect(rgb, P_GRID_X * P_GRID_Y);
+            detect(rgb, P_DETECT_CELLS_FIRST);
             record_obs();
         } else {
             const M3 R_prev = R; const V3 p_prev = p;
             twice(8, [&] { propagate(imu, count); });
             twice(64, [] {});
             PROF_BEGIN(); if (!(P_SKIP & 8)) propagate(imu, count); PROF_END(0);
-            twice(4, [&] { velocity_prior(P_VPRIOR_SIGMA); });
-            if (P_VPRIOR_SIGMA > 0 && !(P_SKIP & 4)) velocity_prior(P_VPRIOR_SIGMA);
+            // light frames (no EKF update pending) take the velocity prior and the corner search
+            const bool light = !P_BALANCE || !P_SPLIT || pending_m == 0;
+            const double vp_sigma = P_BALANCE && P_SPLIT ? P_VPRIOR_SIGMA / std::sqrt((double)P_CLONE_EVERY) : P_VPRIOR_SIGMA;
+            twice(4, [&] { velocity_prior(vp_sigma); });
+            if (P_VPRIOR_SIGMA > 0 && !(P_SKIP & 4) && (light || !P_BALANCE)) velocity_prior(vp_sigma);
             twice(1, [&] { track(rgb, R_prev, p_prev); });
             PROF_BEGIN(); if (!(P_SKIP & 1)) track(rgb, R_prev, p_prev); PROF_END(1);
             const bool clone_frame = frame % P_CLONE_EVERY == 0;
@@ -981,7 +1041,7 @@ struct Estimator {
             nfeats = w;
             }
             twice(2, [&] { detect(rgb, P_DETECT_CELLS); });
-            PROF_BEGIN(); if (!(P_SKIP & 2)) detect(rgb, P_DETECT_CELLS); PROF_END(2);
+            PROF_BEGIN(); if (!(P_SKIP & 2) && light) detect(rgb, P_BALANCE && P_SPLIT ? P_DETECT_CELLS * P_CLONE_EVERY : P_DETECT_CELLS); PROF_END(2);
             if (clone_frame) record_obs_new();
         }
         frame++;
@@ -1136,6 +1196,22 @@ VIOBENCH_EXPORT(init) int32_t init(const char* json, uint32_t length) {
     e.R_ic = e.R_ci.t();
     e.t_ic = (e.R_ic * e.t_ci) * -1.0;
     estimator = &e;
+#if P_BENCH
+    {   // fuel micro-benchmark (init fuel): 100 runs of one EKF kernel on dummy data, m = nc = 24, n = 42
+        static preal A[NMAX][48], Bm[48][6 * (P_CLONES + 1)], C[48][48];
+        for (int i = 0; i < NMAX; i++) for (int j = 0; j < 48; j++) A[i][j] = (preal)(0.001 * (i + j));
+        for (int i = 0; i < 48; i++) for (int j = 0; j < 6 * (P_CLONES + 1); j++) Bm[i][j] = (preal)(0.002 * (i - j));
+        const int m = 24, nc = 24, n = 42;
+        volatile double sink = 0;
+        for (int rep = 0; rep < 100; rep++) {
+            if (P_BENCH == 1) for (int i = 0; i < n; i++) for (int j = 0; j < m; j++) A[i][j] = dotx(&P[i][NI], Bm[j], nc);
+            if (P_BENCH == 2) for (int i = 0; i < m; i++) { for (int j = 0; j < m; j++) C[i][j] = 0; for (int k = 0; k < nc; k++) axpyx(C[i], A[NI + k], Bm[i][k], m); }
+            if (P_BENCH == 3) for (int i = 0; i < n; i++) for (int j = i; j < n; j++) P[i][j] -= dotx(A[i], A[j], m);
+            if (P_BENCH == 4) for (int i = 0; i < n; i++) for (int a2 = 0; a2 < m; a2++) A[i][a2] = (A[i][a2] - dotx(C[a2], A[i], a2)) / (C[a2][a2] + 1);
+            sink = sink + A[3][3] + P[2][2] + C[1][1];
+        }
+    }
+#endif
     return VIOBENCH_STATUS_OK;
 }
 
@@ -1152,7 +1228,8 @@ int32_t debug_state(double* o) {
     double vals[] = {(double)e.frame, (double)e.nfeats, (double)e.nclones, (double)e.st_tracked, (double)e.st_lost, (double)e.st_cand,
                      (double)e.st_tri_fail, (double)e.st_chi_fail, (double)e.st_used, (double)e.st_rows,
                      e.v.x, e.v.y, e.v.z, e.bg.x, e.bg.y, e.bg.z, e.ba.x, e.ba.y, e.ba.z, e.g.x, e.g.y, e.g.z,
-                     std::sqrt(P[6][6]), std::sqrt(P[7][7]), std::sqrt(P[8][8]), std::sqrt(P[15][15])};
+                     std::sqrt(P[6][6]), std::sqrt(P[7][7]), std::sqrt(P[8][8]), std::sqrt(P[15][15]), (double)e.st_last_m, (double)e.st_last_rows, (double)e.st_last_ni};
+    e.st_last_m = e.st_last_rows = e.st_last_ni = 0;
     for (unsigned i = 0; i < sizeof(vals) / sizeof(double); i++) o[i] = vals[i];
     return 0;
 }

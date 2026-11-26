@@ -140,3 +140,24 @@
 #ifndef P_DEPTH_RATE
 #define P_DEPTH_RATE 0.05   // adaptive prior: update rate of the running log-depth
 #endif
+#ifndef P_DETECT_CELLS_FIRST
+#define P_DETECT_CELLS_FIRST 4  // cells searched on the first frame (the rest follow round-robin)
+#endif
+#ifndef P_BALANCE
+#define P_BALANCE 1         // split mode: velocity prior and corner search only on frames without an EKF update
+#endif
+#ifndef P_TRI_ITERS
+#define P_TRI_ITERS 8       // Gauss-Newton iterations of the triangulation
+#endif
+#ifndef P_CHI2_FAST
+#define P_CHI2_FAST 0       // accept a feature without the chi-square test when its residual^2 < this * rows * sigma^2
+#endif
+#ifndef P_FLOATCOV
+#define P_FLOATCOV 0        // covariance and EKF update in float32 (f32x4 SIMD)
+#endif
+#ifndef P_EKF_SKIP
+#define P_EKF_SKIP 0        // fuel attribution only: skip EKF parts (1 PHt, 2 S, 4 W, 8 P update, 16 correction)
+#endif
+#ifndef P_BENCH
+#define P_BENCH 0           // fuel micro-benchmark in init (1 PHt, 2 S, 3 P update, 4 W solve), 100 repetitions
+#endif
