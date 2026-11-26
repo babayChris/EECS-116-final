@@ -11,6 +11,14 @@ Team modulo's EECS 116/216 Project 3 code: a compute-aware visual-inertial odome
 
 For reference on the stage 2 episodes, the stage 1 Python build scored 3.50 m at 20.1 M. Full server records are in `results/klt-bounded/server_nov14.json` and `results/klt-bounded/nov22_stage2.json`.
 
+## Stage 3 work in progress (branch `victor/stage3`)
+
+A new estimator, `native/vio_ekf`: a compact MSCKF-style visual-inertial EKF in C++ (no OpenCV) with gravity in the state,
+so flights that start in motion need no calibration hover, and patch tracking read straight from the green channel.
+`scripts/build_stage3.sh` builds the candidates; `scripts/make_stage3_episodes.sh` simulates stage-3-like flights (fast
+autopilot, in-motion start, FoV 75–135°, motion blur 0–50 ms). Design, sources (including ideas from the class's stage 2
+presentations) and local results: `results/stage3/README.md`. Nothing from it has been submitted.
+
 ## What the estimator does
 
 It starts from the upstream KLT + IMU example and changes three things:
