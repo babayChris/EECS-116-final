@@ -255,7 +255,18 @@ stage 2 slides: `results/stage3/README.md`.
   is below the cost of any covariance filter here (a 36-state covariance update alone is tens of thousands).
 - Not done: server submission, warehouse/forest data, learned components, the fuel goal of 10k.
 
-STAGE3_RESULTS_PLACEHOLDER
+Results (sandbox, mean unaligned ATE; full table and caveats in `results/stage3/README.md`):
+
+| Build | new stage-3-like (16 x 45 s) | stage-3-like test (4 x 8 s) | agile proxy, in-motion (4 x 7.5 s) | public, cropped in motion (10 x 30 s) | agile proxy x2.5 scale (4) | public (10 x 60 s, hover start) | Peak fuel |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| zero output | 2.24 m | 2.23 m | 1.89 m | 4.55 m | 4.72 m | 4.89 m | |
+| `ekf_main` | 1.31 m | 0.76 m | 0.37 m | 0.73 m | 3.13 m | 1.60 m | 0.95 M |
+| `ekf_lite` | 1.91 m | 0.78 m | 0.42 m | 0.73 m | 3.66 m | 1.77 m | 0.59 M |
+| `ekf_ultra` | 1.56 m | 0.90 m | 0.58 m | 1.05 m | 3.38 m | 1.71 m | 0.44 M |
+| `ekf_c3` | 1.83 m | 1.08 m | 0.31 m | 0.79 m | 3.77 m | 1.57 m | 0.96 M |
+| `ekf_slam8b` | 3.59 m | 1.03 m | 0.27 m | 0.92 m | 1.83 m | 1.69 m | 1.39 M |
+| `r4_clamp` | 6.68 m | 1.15 m | 1.00 m | 5.08 m | 2.15 m | 5.72 m | 2.50 M |
+
 
 ## Not completed or not known
 

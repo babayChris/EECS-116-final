@@ -53,4 +53,45 @@ simulator's camera hook). The public scene catalogs contain only ProcTHOR and HS
 forest episodes; as a stand-in for larger scenes, `scripts/host_native.py` can scale any episode in space (`path@start:dur:k`:
 positions and true accelerations x k, images unchanged), which is exactly the same flight in a k-times larger scene.
 
-RESULTS_PLACEHOLDER
+## Local results (WASM sandbox, default limits, mean unaligned ATE)
+
+| Build | new stage-3-like (16 x 45 s) | stage-3-like test (4 x 8 s) | agile proxy, in-motion (4 x 7.5 s) | public, cropped in motion (10 x 30 s; deleted after the run, recreate in memory with `<hash>@15:30` specs) | agile proxy x2.5 scale (4) | public (10 x 60 s, hover start) | Peak fuel |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| zero output | 2.24 m | 2.23 m | 1.89 m | 4.55 m | 4.72 m | 4.89 m | |
+| `ekf_main` | 1.31 m | 0.76 m | 0.37 m | 0.73 m | 3.13 m | 1.60 m | 0.95 M |
+| `ekf_lite` | 1.91 m | 0.78 m | 0.42 m | 0.73 m | 3.66 m | 1.77 m | 0.59 M |
+| `ekf_ultra` | 1.56 m | 0.90 m | 0.58 m | 1.05 m | 3.38 m | 1.71 m | 0.44 M |
+| `ekf_c3` | 1.83 m | 1.08 m | 0.31 m | 0.79 m | 3.77 m | 1.57 m | 0.96 M |
+| `ekf_slam8b` | 3.59 m | 1.03 m | 0.27 m | 0.92 m | 1.83 m | 1.69 m | 1.39 M |
+| `r4_clamp` | 6.68 m | 1.15 m | 1.00 m | 5.08 m | 2.15 m | 5.72 m | 2.50 M |
+
+Builds (`bash scripts/build_stage3.sh`; the record with per-episode numbers and wasm hashes is `results/stage3/local.json`):
+
+- `ekf_main`: 3 clones, up to 20 features, priors tuned on the new set's scenes 12 and 45 (velocity prior 3 m/s per frame,
+  inverse-depth prior std 0.2 at 3 m, initial gyro bias std 0.01 rad/s, bias walk 1e-4). On the held-out scenes 88 and 150
+  it scores 1.68 m (host) against 2.29 m before tuning and 2.09 m for zero output; those scenes are mostly blank walls.
+- `ekf_lite` / `ekf_ultra`: 12 / 8 features, 3 / 2 features per update, 5 x 5 patches; same priors.
+- `ekf_c3`: `ekf_main` before the prior tuning. `ekf_slam8b`: with 8 SLAM points; better on the scaled agile set, much
+  worse on the new set (landmarks lock in the scale they are born with).
+- `r4_clamp`: our stage 2 submission (4.13 m on the stage 2 server).
+
+The generated flights average 0.3-0.65 m/s (ProcTHOR rooms limit the faster autopilot), slower than the 0.7-1.3 m/s
+other teams measured for stage 2, so they understate the agility; the warehouse and forest stand-in is only the scaled set.
+
+## What limits accuracy
+
+1. Heading drift from a wrongly learned gyro bias on blank walls (20-140 deg over 45 s on the worst scenes); the
+   tighter bias prior halves it on average but it is still the largest error.
+2. Metric scale: with 0.15-0.3 s clone windows the accelerometer constrains scale weakly; the depth and velocity priors
+   provide it indoors and are wrong for larger scenes (scaled sets). SLAM points and a linear visual-inertial
+   initialization (`P_VI_INIT`) were tried and did not fix this on the realistic data.
+3. 10k fuel: covariance filtering alone costs far more (propagation + tracking ~0.3 M per frame at 3 clones), so the
+   1 m at 10k goal needs a different estimator class, not tuning.
+
+## Next steps
+
+- Long-baseline rotation constraint (a keyframe clone kept ~1.5 s, or the stage 2 vision bias correction) against
+  heading drift; then re-check the priors.
+- Faster training/test flights in larger HSSD scenes as the warehouse stand-in (HSSD renders slower, ~6.5 GB RAM).
+- Submit `ekf_main` (and `ekf_ultra` as the low-fuel point) once the user decides; nothing has been uploaded.
+
