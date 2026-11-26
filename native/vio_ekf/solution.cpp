@@ -1438,7 +1438,11 @@ struct Estimator {
             PROF_BEGIN(); if (!(P_SKIP & 8)) propagate(imu, count); PROF_END(0);
             // light frames (no EKF update pending) take the velocity prior and the corner search
             const bool light = !P_BALANCE || !P_SPLIT || pending_m == 0;
-            const double vp_sigma = P_BALANCE && P_SPLIT ? P_VPRIOR_SIGMA / std::sqrt((double)P_CLONE_EVERY) : P_VPRIOR_SIGMA;
+            int nalive_now = 0;
+            for (int k = 0; k < nfeats; k++) nalive_now += feats[k].alive && feats[k].slam < 0;
+            starved = nalive_now < P_STARVE_FEATS ? starved + 1 : 0;
+            const double vp_base = starved >= P_STARVE_FRAMES ? P_VPRIOR_STARVED : P_VPRIOR_SIGMA;
+            const double vp_sigma = P_BALANCE && P_SPLIT ? vp_base / std::sqrt((double)P_CLONE_EVERY) : vp_base;
             twice(4, [&] { velocity_prior(vp_sigma); });
             if (P_VPRIOR_SIGMA > 0 && !(P_SKIP & 4) && (light || !P_BALANCE)) velocity_prior(vp_sigma);
             if (P_VZ_SIGMA > 0 && (light || !P_BALANCE)) vertical_prior(P_BALANCE && P_SPLIT ? P_VZ_SIGMA / std::sqrt((double)P_CLONE_EVERY) : P_VZ_SIGMA);
@@ -1623,6 +1627,7 @@ struct Estimator {
     // last good pose; a non-finite or absurd state restarts the filter from it (velocity zero, fresh covariance)
     M3 good_R = M3::eye(); V3 good_p{0, 0, 0}; V3 good_g{0, 0, -GRAVITY}; V3 good_bg{0, 0, 0};
     int resets = 0;
+    int starved = 0;  // consecutive frames with too few tracked features
     void watchdog() {
         bool ok = std::isfinite(p.x + p.y + p.z + v.x + v.y + v.z) && std::isfinite(R.m[0][0] + R.m[1][1] + R.m[2][2]) && norm(v) < 0.99 * P_MAX_SPEED;
         for (int i = 0; i < NI && ok; i++) ok = std::isfinite((double)P[i][i]) && P[i][i] < 1e4;

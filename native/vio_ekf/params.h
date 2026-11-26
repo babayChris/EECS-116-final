@@ -221,3 +221,12 @@
 #ifndef P_DETECT_MULT
 #define P_DETECT_MULT P_CLONE_EVERY  // split mode: cells searched on a light frame = P_DETECT_CELLS * this
 #endif
+#ifndef P_STARVE_FEATS
+#define P_STARVE_FEATS 0    // fewer tracked (non-SLAM) features than this counts as a starved frame (0 = off)
+#endif
+#ifndef P_STARVE_FRAMES
+#define P_STARVE_FRAMES 10  // consecutive starved frames before the stronger velocity prior applies
+#endif
+#ifndef P_VPRIOR_STARVED
+#define P_VPRIOR_STARVED 1.0  // m/s per frame: velocity prior while starved
+#endif
