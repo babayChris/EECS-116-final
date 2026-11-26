@@ -161,3 +161,18 @@
 #ifndef P_BENCH
 #define P_BENCH 0           // fuel micro-benchmark in init (1 PHt, 2 S, 3 P update, 4 W solve), 100 repetitions
 #endif
+#ifndef P_SLAM
+#define P_SLAM 0            // persistent SLAM points in the state (world xyz)
+#endif
+#ifndef P_SLAM_REL
+#define P_SLAM_REL 0.15     // a feature becomes a SLAM point if its inverse-depth std is below this fraction
+#endif
+#ifndef P_SLAM_EVERY
+#define P_SLAM_EVERY 2      // SLAM point updates every this many frames
+#endif
+#ifndef P_SLAM_CHI2
+#define P_SLAM_CHI2 9.21    // per-point chi-square gate (2 dof, 99 %)
+#endif
+#ifndef P_SLAM_ROWS
+#define P_SLAM_ROWS 1       // a new SLAM point's remaining (null-space) rows also update the state
+#endif

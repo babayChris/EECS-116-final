@@ -37,12 +37,22 @@ def run_episode(args):
         raise RuntimeError("init failed")
     est = np.zeros((episode.num_frames, 13))
     out = np.zeros(13)
+    oracle_v = os.environ.get("ORACLE_V")
     for i, (t, frame, imu) in enumerate(episode.steps(frames)):
         frame = np.ascontiguousarray(frame, dtype=np.uint8)
         imu = np.ascontiguousarray(imu, dtype=np.float64)
         if lib.step(float(t), frame.ctypes.data, imu.ctypes.data, len(imu), out.ctypes.data) != 0:
             raise RuntimeError(f"step {i} failed")
         est[i] = out
+        if oracle_v and i == 0:
+            # true velocity of the IMU at frame 0 in the IMU-0 frame (camera twist rotated by T_imu_cam)
+            gt = episode.ground_truth_state()
+            T = np.array(config["T_cam_imu"]); R_ci = T[:3, :3]
+            v_cam = gt[0, 7:10]  # camera velocity in camera-0 axes (frame 0: camera axes = camera-0 axes)
+            v_imu = R_ci.T @ v_cam
+            lib.debug_set_velocity.argtypes = [ctypes.c_void_p, ctypes.c_double]
+            vv = np.ascontiguousarray(v_imu, dtype=np.float64)
+            lib.debug_set_velocity(vv.ctypes.data, float(oracle_v))
     m = evaluate_trajectory(episode.ground_truth_state(), est, episode.frame_times)
     return str(source), m.ate_rmse, m.sim3_ate_rmse, m.sim3_scale, m.rotation_rmse, m.velocity_rmse, m.distance_travelled
 

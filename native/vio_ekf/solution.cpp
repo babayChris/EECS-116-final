@@ -97,11 +97,16 @@ static unsigned long long prof_acc[8], prof_t0;
 #define PROF_BEGIN() ((void)0)
 #define PROF_END(i) ((void)0)
 #endif
+#ifdef P_CHECKPSD
+#define CHECKPSD(w) check_psd(w)
+#else
+#define CHECKPSD(w) ((void)0)
+#endif
 
 namespace {
 
 constexpr int NI = 18;                        // IMU part of the error state
-constexpr int NMAX = NI + 6 * (P_CLONES + 1); // full error state (one extra clone while a split update is pending)
+constexpr int NMAX = NI + 3 * P_SLAM + 6 * (P_CLONES + 1); // full error state: IMU, SLAM points, clones (+1 while a split update is pending)
 constexpr int W0 = 320, H0 = 240;
 constexpr int GW = W0 / P_DS, GH = H0 / P_DS; // gray image size
 constexpr double GRAVITY = 9.81;
@@ -317,6 +322,7 @@ struct Feature {
     V3 pw;
     double sig_rho;        // posterior inverse-depth std of that point
     Template tpl;          // patch from the previous frame
+    int slam;              // SLAM slot (point in the state), -1 if none
 };
 
 struct Clone { int id; M3 R; V3 p; };
@@ -344,9 +350,45 @@ struct Estimator {
     double depth_est = P_PRED_DEPTH;
     double log_depth = std::log(P_DEPTH_PRIOR);  // running mean log-depth of well-triangulated points (adaptive prior)
     // diagnostics
+    int st_slam_init = 0, st_slam_upd = 0;
     int st_tracked = 0, st_lost = 0, st_cand = 0, st_tri_fail = 0, st_chi_fail = 0, st_used = 0, st_rows = 0;
 
-    int dim() const { return NI + 6 * nclones; }
+    // SLAM points: world xyz in the state between the IMU block and the clones
+    int nslam = 0;
+    V3 slam_p[P_SLAM > 0 ? P_SLAM : 1];
+    int slam_bad[P_SLAM > 0 ? P_SLAM : 1];
+    int C0() const { return NI + 3 * nslam; }  // first clone column
+    int dim() const { return C0() + 6 * nclones; }
+
+    void insert_block(int pos, int size) {  // zero rows/columns at pos (state grows by size)
+        const int n = dim();
+        for (int i = n - 1; i >= 0; i--) {
+            const int ii = i < pos ? i : i + size;
+            for (int j = n - 1; j >= 0; j--) { const int jj = j < pos ? j : j + size; P[ii][jj] = P[i][j]; }
+        }
+        for (int i = 0; i < n + size; i++) for (int k = 0; k < size; k++) { P[pos + k][i] = 0; P[i][pos + k] = 0; }
+    }
+    void remove_block(int pos, int size, int n) {  // n = dimension before removal
+        for (int i = 0; i < n; i++) {
+            if (i >= pos && i < pos + size) continue;
+            const int ii = i < pos ? i : i - size;
+            for (int j = 0; j < n; j++) {
+                if (j >= pos && j < pos + size) continue;
+                const int jj = j < pos ? j : j - size;
+                P[ii][jj] = P[i][j];
+            }
+        }
+    }
+    void remove_slam(int slot) {
+        const int n = dim();
+        remove_block(NI + 3 * slot, 3, n);
+        for (int k = slot; k < nslam - 1; k++) { slam_p[k] = slam_p[k + 1]; slam_bad[k] = slam_bad[k + 1]; }
+        nslam--;
+        for (int k = 0; k < nfeats; k++) {
+            if (feats[k].slam == slot) feats[k].slam = -1;
+            else if (feats[k].slam > slot) feats[k].slam--;
+        }
+    }
 
     // ---------------------------------------------------------------- propagation
     void propagate(const double* imu, int count) {
@@ -437,7 +479,7 @@ struct Estimator {
 
     void remove_clone(int slot) {
         const int n = dim();
-        const int s = NI + 6 * slot;
+        const int s = C0() + 6 * slot;
         // shift rows and columns after the removed block
         for (int i = 0; i < n; i++) {
             if (i >= s && i < s + 6) continue;
@@ -561,14 +603,17 @@ struct Estimator {
     double rs[MAX_ROWS];
 
     // builds a feature's projected rows into Hs/rs starting at `row`; returns the number of rows (0 if rejected)
-    int feature_rows(Feature& f, int row) {
+    int feature_rows(Feature& f, int row, bool want_slam = false) {
         V3 Pw; double abr[5]; M3 Ra;
         st_cand++;
+        bool slam_mode = false;
         // well-observed points need no depth prior: project the whole point out (classic MSCKF); poorly observed ones
         // (little parallax) keep the inverse-depth prior
         PROF_BEGIN();
         bool prior = P_RHO_SIGMA > 0;
-        if (prior && P_PRIOR_SWITCH > 0 && triangulate(f, Pw, abr, &Ra, false) && abr[3] < P_PRIOR_SWITCH * abr[2]) {
+        if (want_slam && P_SLAM > 0 && nslam < P_SLAM && triangulate(f, Pw, abr, &Ra, false) && abr[3] < P_SLAM_REL * abr[2]) {
+            prior = false; slam_mode = true;
+        } else if (prior && P_PRIOR_SWITCH > 0 && triangulate(f, Pw, abr, &Ra, false) && abr[3] < P_PRIOR_SWITCH * abr[2]) {
             prior = false;
             if (P_ADAPT_DEPTH) {
                 log_depth += P_DEPTH_RATE * (-std::log(abr[2]) - log_depth);
@@ -614,8 +659,8 @@ struct Estimator {
                 }
             }
         }
-        // point Jacobian in (al, be, rho)
-        for (int i = 0; i < m; i++) {
+        // point Jacobian in (al, be, rho); a new SLAM point keeps world xyz
+        if (!slam_mode) for (int i = 0; i < m; i++) {
             const double h0 = Hf[i][0], h1 = Hf[i][1], h2 = Hf[i][2];
             for (int j = 0; j < 3; j++) Hf[i][j] = h0 * Jf[j].x + h1 * Jf[j].y + h2 * Jf[j].z;
         }
@@ -648,6 +693,14 @@ struct Estimator {
         }
         const int mr = m - npro;
         const double sig = P_SIGMA_PX / (fx * P_DS);
+        double Rf[3][3], Hx1[3][6 * MAX_OBS], r1[3];
+        if (slam_mode) {
+            for (int i = 0; i < 3; i++) {
+                for (int j = 0; j < 3; j++) Rf[i][j] = j >= i ? Hf[i][j] : 0;
+                for (int c = 0; c < nc; c++) Hx1[i][c] = Hx[i][c];
+                r1[i] = r[i];
+            }
+        }
         // move the kept rows up to start at 0
         for (int i = 0; i < mr; i++) {
             for (int c = 0; c < nc; c++) Hx[i][c] = Hx[npro + i][c];
@@ -676,7 +729,7 @@ struct Estimator {
         if (P_CHI2 && r2 > P_CHI2_FAST * mr * sig * sig) {
             // S = Hx Pcc Hx^T + sig^2 I over the involved clones; chi-square test on r
             int gidx[6 * MAX_OBS];
-            for (int c = 0; c < nc; c++) gidx[c] = NI + 6 * slot[c / 6] + c % 6;
+            for (int c = 0; c < nc; c++) gidx[c] = C0() + 6 * slot[c / 6] + c % 6;
             double Pcc[6 * MAX_OBS][6 * MAX_OBS];
             for (int a2 = 0; a2 < nc; a2++) {
                 const preal* Prow = P[gidx[a2]];
@@ -711,6 +764,54 @@ struct Estimator {
             if (chi > P_CHI2_SCALE * chi2_95[std::min(mr, 17)]) { st_chi_fail++; PROF_END(6); return 0; }
         }
         PROF_END(6);
+        if (slam_mode) {
+            // the point joins the state: dPw = Rf^-1 (r1 - Hx1 dx - n1)  =>  J = -Rf^-1 Hx1, cov = J P J^T + sig^2 Rf^-1 Rf^-T
+            if (std::fabs(Rf[0][0]) < 1e-9 || std::fabs(Rf[1][1]) < 1e-9 || std::fabs(Rf[2][2]) < 1e-9) return 0;
+            double Ri[3][3] = {};  // Rf^-1 (upper triangular)
+            for (int c = 0; c < 3; c++) {
+                for (int i = 2; i >= 0; i--) {
+                    double s2 = (i == c) ? 1.0 : 0.0;
+                    for (int k = i + 1; k < 3; k++) s2 -= Rf[i][k] * Ri[k][c];
+                    Ri[i][c] = s2 / Rf[i][i];
+                }
+            }
+            double J[3][6 * MAX_OBS], df[3];
+            for (int i = 0; i < 3; i++) {
+                df[i] = Ri[i][0] * r1[0] + Ri[i][1] * r1[1] + Ri[i][2] * r1[2];
+                for (int c = 0; c < nc; c++) J[i][c] = -(Ri[i][0] * Hx1[0][c] + Ri[i][1] * Hx1[1][c] + Ri[i][2] * Hx1[2][c]);
+            }
+            int gidx[6 * MAX_OBS];
+            for (int c = 0; c < nc; c++) gidx[c] = C0() + 6 * slot[c / 6] + c % 6;
+            const int nold = dim();
+            static double Pfx[3][NMAX];
+            for (int k = 0; k < 3; k++)
+                for (int j = 0; j < nold; j++) {
+                    double s2 = 0;
+                    for (int c = 0; c < nc; c++) s2 += J[k][c] * P[gidx[c]][j];
+                    Pfx[k][j] = s2;
+                }
+            double Pff[3][3];
+            for (int k = 0; k < 3; k++)
+                for (int l = 0; l < 3; l++) {
+                    double s2 = 0;
+                    for (int c = 0; c < nc; c++) s2 += Pfx[k][gidx[c]] * J[l][c];
+                    double nz = 0;
+                    for (int q = 0; q < 3; q++) nz += Ri[k][q] * Ri[l][q];
+                    Pff[k][l] = s2 + sig * sig * nz;
+                }
+            const int pos = NI + 3 * nslam;
+            insert_block(pos, 3);
+            for (int k = 0; k < 3; k++) {
+                for (int j = 0; j < nold; j++) { const int jj = j < pos ? j : j + 3; P[pos + k][jj] = P[jj][pos + k] = (preal)Pfx[k][j]; }
+                for (int l = 0; l < 3; l++) P[pos + k][pos + l] = (preal)Pff[k][l];
+            }
+            slam_p[nslam] = Pw + V3{df[0], df[1], df[2]};
+            nslam++; CHECKPSD("after slam init"); nslam--;
+            slam_bad[nslam] = 0;
+            f.slam = nslam++;
+            st_slam_init++;
+            if (!P_SLAM_ROWS) { f.has_pw = true; f.pw = Pw; return 0; }
+        }
         f.has_pw = true; f.pw = Pw; f.sig_rho = abr[3];
         for (int i = 0; i < mr; i++) {
             for (int c = 0; c < 6 * (P_CLONES + 1); c++) Hs[row + i][c] = 0;
@@ -721,6 +822,10 @@ struct Estimator {
     }
 
     void apply_correction(const double* dx) {
+#ifdef P_CHECKPSD
+        { double a = 0, b = 0; for (int i = 0; i < 3; i++) { a += dx[i] * dx[i]; b += dx[6 + i] * dx[6 + i]; }
+          if (a > 0.01 || b > 0.25) std::fprintf(stderr, "frame %d big correction: dtheta %.3f dv %.3f nslam %d\n", frame, std::sqrt(a), std::sqrt(b), nslam); }
+#endif
         R = expso3(V3{dx[0], dx[1], dx[2]}) * R;
         orthonormalize(R);
         p = p + V3{dx[3], dx[4], dx[5]};
@@ -729,8 +834,9 @@ struct Estimator {
         ba = ba + V3{dx[12], dx[13], dx[14]};
         g = g + V3{dx[15], dx[16], dx[17]};
         g = g * (GRAVITY / norm(g));
+        for (int k = 0; k < nslam; k++) slam_p[k] = slam_p[k] + V3{dx[NI + 3 * k], dx[NI + 3 * k + 1], dx[NI + 3 * k + 2]};
         for (int k = 0; k < nclones; k++) {
-            const double* d = dx + NI + 6 * k;
+            const double* d = dx + C0() + 6 * k;
             clones[k].R = expso3(V3{d[0], d[1], d[2]}) * clones[k].R;
             orthonormalize(clones[k].R);
             clones[k].p = clones[k].p + V3{d[3], d[4], d[5]};
@@ -770,6 +876,11 @@ struct Estimator {
     void ekf_update(int m, int nc) {
         const int n = dim();
         st_last_m = m;
+#ifdef P_CHECKPSD
+        { double mx = 0; int bi = -1, bj = -1; for (int i = 0; i < n; i++) for (int j = 0; j < n; j++) if (!(std::fabs((double)P[i][j]) < 1e6)) { bi = i; bj = j; }
+          for (int i = 0; i < m; i++) for (int k = 0; k < nc; k++) mx = std::max(mx, std::fabs(Hs[i][k]));
+          std::fprintf(stderr, "frame %d ekf: n %d m %d nc %d C0 %d nclones %d nslam %d bad P at %d %d, max|H| %.3g\n", frame, n, m, nc, C0(), nclones, nslam, bi, bj, mx); }
+#endif
         const double sig = P_SIGMA_PX / (fx * P_DS);
         constexpr int MR = MAX_ROWS > NMAX ? MAX_ROWS : NMAX;
         static preal PHt[NMAX][MR];
@@ -778,7 +889,7 @@ struct Estimator {
         static preal Lf[MR][MR];
         for (int j = 0; j < m; j++) for (int k = 0; k < nc; k++) Hf[j][k] = (preal)Hs[j][k];
         for (int i = 0; i < n; i++) {
-            const preal* Pi = &P[i][NI];
+            const preal* Pi = &P[i][C0()];
             if (!(P_EKF_SKIP & 1)) for (int j = 0; j < m; j++) PHt[i][j] = dotx(Pi, Hf[j], nc);
         }
         {
@@ -786,7 +897,7 @@ struct Estimator {
             for (int i = 0; i < m; i++) {
                 preal* Si = Sf[i];
                 for (int j = 0; j < m; j++) Si[j] = 0;
-                if (!(P_EKF_SKIP & 2)) for (int k = 0; k < nc; k++) axpyx(Si, PHt[NI + k], Hf[i][k], m);
+                if (!(P_EKF_SKIP & 2)) for (int k = 0; k < nc; k++) axpyx(Si, PHt[C0() + k], Hf[i][k], m);
             }
             for (int i = 0; i < m; i++) for (int j = 0; j <= i; j++) S[i][j] = 0.5 * ((double)Sf[i][j] + (double)Sf[j][i]) + (i == j ? sig * sig : 0);
         }
@@ -802,6 +913,12 @@ struct Estimator {
         static preal Wm[NMAX][MR];
         double z[MR];
         for (int a2 = 0; a2 < m; a2++) z[a2] = (rs[a2] - dotd(S[a2], z, a2)) / S[a2][a2];
+#ifdef P_CHECKPSD
+        { double mn = 1e30, mx = 0; for (int a2 = 0; a2 < m; a2++) { mn = std::min(mn, S[a2][a2]); mx = std::max(mx, S[a2][a2]); }
+          double zz = 0; for (int a2 = 0; a2 < m; a2++) zz += z[a2] * z[a2];
+          double pm = 0; for (int i = 0; i < n; i++) for (int j = 0; j < m; j++) pm = std::max(pm, std::fabs((double)PHt[i][j]));
+          std::fprintf(stderr, "frame %d ekf: L diag %.3g..%.3g  |z|^2 %.3g  max|PHt| %.3g\n", frame, mn, mx, zz, pm); }
+#endif
         preal zf[MR];
         for (int a2 = 0; a2 < m; a2++) zf[a2] = (preal)z[a2];
         double dx[NMAX];
@@ -820,9 +937,126 @@ struct Estimator {
         }
         for (int i = 0; i < n; i++) if (P[i][i] < 1e-12) P[i][i] = 1e-12;
         if (!(P_EKF_SKIP & 16)) apply_correction(dx);
+        CHECKPSD("after msckf update");
     }
 
     // features with >= P_MIN_OBS observations in `ids` (feature indices) are used in one update
+    // EKF update of the SLAM points against the current pose (rows: 2 per tracked point, 9 nonzero columns each)
+    void slam_update() {
+        if (nslam == 0) return;
+        const int n = dim();
+        const double sig = P_SIGMA_PX / (fx * P_DS);
+        constexpr int MS = 2 * (P_SLAM > 0 ? P_SLAM : 1);
+        int col[MS][9]; double h[MS][9]; double r[MS]; int m = 0;
+        const M3 Rt = R.t();
+        const M3 A = R_ci * Rt;
+        for (int k = 0; k < nfeats; k++) {
+            const Feature& f = feats[k];
+            if (!f.alive || f.slam < 0) continue;
+            const int j = f.slam;
+            const V3 Pw = slam_p[j];
+            const V3 Pc = A * (Pw - p) + t_ci;
+            if (Pc.z < 0.1) { slam_bad[j] += 2; continue; }
+            const double iz = 1.0 / Pc.z;
+            double u, vv; pixel_to_norm(f.x, f.y, u, vv);
+            const double ru = u - Pc.x * iz, rv = vv - Pc.y * iz;
+            const double Jp[2][3] = {{iz, 0, -Pc.x * iz * iz}, {0, iz, -Pc.y * iz * iz}};
+            const M3 Bth = A * skew(Pw - p);
+            double hr[2][9]; int cr[9];
+            for (int q = 0; q < 3; q++) { cr[q] = q; cr[3 + q] = 3 + q; cr[6 + q] = NI + 3 * j + q; }
+            for (int a = 0; a < 2; a++)
+                for (int q = 0; q < 3; q++) {
+                    double hth = 0, hf = 0;
+                    for (int t = 0; t < 3; t++) { hth += Jp[a][t] * Bth.m[t][q]; hf += Jp[a][t] * A.m[t][q]; }
+                    hr[a][q] = hth; hr[a][3 + q] = -hf; hr[a][6 + q] = hf;
+                }
+            // chi-square gate: S = H P H^T + sig^2 I (2 x 2)
+            double HP[2][9], S2[2][2];
+            for (int a = 0; a < 2; a++)
+                for (int q = 0; q < 9; q++) {
+                    double s2 = 0;
+                    for (int t = 0; t < 9; t++) s2 += hr[a][t] * P[cr[t]][cr[q]];
+                    HP[a][q] = s2;
+                }
+            for (int a = 0; a < 2; a++) for (int b = 0; b < 2; b++) {
+                double s2 = 0; for (int q = 0; q < 9; q++) s2 += HP[a][q] * hr[b][q];
+                S2[a][b] = s2 + (a == b ? sig * sig : 0);
+            }
+            const double det = S2[0][0] * S2[1][1] - S2[0][1] * S2[1][0];
+            if (det <= 0) { slam_bad[j]++; continue; }
+            const double chi = (S2[1][1] * ru * ru - 2 * S2[0][1] * ru * rv + S2[0][0] * rv * rv) / det;
+            if (chi > P_SLAM_CHI2) { slam_bad[j]++; continue; }
+#ifdef P_CHECKPSD
+            std::fprintf(stderr, "frame %d slam %d: r %.4f %.4f (px %.2f) chi %.2f S %.3g %.3g Pff %.3g depth %.2f\n", frame, j, ru, rv, std::sqrt(ru*ru+rv*rv)*fx*P_DS, chi, S2[0][0], S2[1][1], (double)P[NI+3*j][NI+3*j], Pc.z);
+#endif
+            slam_bad[j] = 0;
+            for (int a = 0; a < 2; a++) { for (int q = 0; q < 9; q++) { col[m][q] = cr[q]; h[m][q] = hr[a][q]; } r[m] = a ? rv : ru; m++; }
+        }
+        if (m > 0) {
+            static preal PHt[NMAX][MS];
+            static double S[MS][MS];
+            for (int i = 0; i < n; i++)
+                for (int a = 0; a < m; a++) {
+                    double s2 = 0;
+                    for (int q = 0; q < 9; q++) s2 += P[i][col[a][q]] * h[a][q];
+                    PHt[i][a] = (preal)s2;
+                }
+            for (int a = 0; a < m; a++)
+                for (int b = 0; b <= a; b++) {
+                    double s2 = 0;
+                    for (int q = 0; q < 9; q++) s2 += h[a][q] * PHt[col[a][q]][b];
+                    S[a][b] = S[b][a] = s2 + (a == b ? sig * sig : 0);
+                }
+            for (int i = 0; i < m; i++)
+                for (int j = 0; j <= i; j++) {
+                    const double s2 = S[i][j] - dotd(S[i], S[j], j);
+                    if (i == j) { if (s2 <= 1e-30) return; S[i][i] = std::sqrt(s2); }
+                    else S[i][j] = s2 / S[j][j];
+                }
+            double z[MS];
+            for (int a = 0; a < m; a++) z[a] = (r[a] - dotd(S[a], z, a)) / S[a][a];
+            static preal Wm[NMAX][MS];
+            static preal Lf[MS][MS];
+            preal zf[MS];
+            for (int a = 0; a < m; a++) { zf[a] = (preal)z[a]; for (int b = 0; b < m; b++) Lf[a][b] = b <= a ? (preal)S[a][b] : 0; }
+            double dx[NMAX];
+            for (int i = 0; i < n; i++) {
+                preal* w = Wm[i];
+                for (int a = 0; a < m; a++) w[a] = (PHt[i][a] - dotx(Lf[a], w, a)) / Lf[a][a];
+                dx[i] = dotx(w, zf, m);
+            }
+            for (int i = 0; i < n; i++)
+                for (int j = i; j < n; j++) { const preal val = P[i][j] - dotx(Wm[i], Wm[j], m); P[i][j] = val; P[j][i] = val; }
+            for (int i = 0; i < n; i++) if (P[i][i] < 1e-12) P[i][i] = 1e-12;
+            apply_correction(dx);
+            CHECKPSD("after slam update");
+            st_slam_upd += m / 2;
+        }
+        for (int j = nslam - 1; j >= 0; j--) if (slam_bad[j] >= 2) remove_slam(j);
+    }
+
+#ifdef P_CHECKPSD
+    void check_psd(const char* where) {
+        const int n = dim();
+        static double L[NMAX][NMAX];
+        double minp = 1e30; int bad = -1;
+        for (int i = 0; i < n; i++)
+            for (int j = 0; j <= i; j++) {
+                double s2 = 0.5 * (P[i][j] + P[j][i]);
+                for (int k = 0; k < j; k++) s2 -= L[i][k] * L[j][k];
+                if (i == j) { if (s2 < minp) { minp = s2; } if (s2 <= 0) { bad = i; s2 = 1e-30; } L[i][i] = std::sqrt(s2); }
+                else L[i][j] = s2 / L[j][j];
+            }
+        double asym = 0;
+        for (int i = 0; i < n; i++) for (int j = 0; j < n; j++) asym = std::max(asym, std::fabs((double)P[i][j] - (double)P[j][i]));
+        if (bad >= 0 || asym > 1e-9) std::fprintf(stderr, "frame %d %s: not PD at %d (min pivot %.3g), asym %.3g, nslam %d nclones %d\n", frame, where, bad, minp, asym, nslam, nclones);
+    }
+#endif
+
+    void drop_dead_slam() {
+        for (int k = 0; k < nfeats; k++) if (!feats[k].alive && feats[k].slam >= 0) remove_slam(feats[k].slam);
+    }
+
     // weak zero-mean velocity pseudo-measurement (bounds IMU-only drift when vision starves)
     void velocity_prior(double sigma) {
         const int n = dim();
@@ -835,18 +1069,22 @@ struct Estimator {
         I[0][0] = (S[1][1] * S[2][2] - S[1][2] * S[2][1]) / det; I[0][1] = (S[0][2] * S[2][1] - S[0][1] * S[2][2]) / det; I[0][2] = (S[0][1] * S[1][2] - S[0][2] * S[1][1]) / det;
         I[1][0] = (S[1][2] * S[2][0] - S[1][0] * S[2][2]) / det; I[1][1] = (S[0][0] * S[2][2] - S[0][2] * S[2][0]) / det; I[1][2] = (S[0][2] * S[1][0] - S[0][0] * S[1][2]) / det;
         I[2][0] = (S[1][0] * S[2][1] - S[1][1] * S[2][0]) / det; I[2][1] = (S[0][1] * S[2][0] - S[0][0] * S[2][1]) / det; I[2][2] = (S[0][0] * S[1][1] - S[0][1] * S[1][0]) / det;
-        static double K[NMAX][3];
         const double r[3] = {-v.x, -v.y, -v.z};
+        // K = P[:, v] S^-1 ; P -= K P[v, :] using contiguous copies of rows 6..8 (P is symmetric)
+        static preal Rv[3][NMAX];
+        for (int a = 0; a < 3; a++) for (int j = 0; j < n; j++) Rv[a][j] = P[6 + a][j];
         double dx[NMAX];
         for (int i = 0; i < n; i++) {
-            for (int a = 0; a < 3; a++) K[i][a] = P[i][6] * I[0][a] + P[i][7] * I[1][a] + P[i][8] * I[2][a];
-            dx[i] = K[i][0] * r[0] + K[i][1] * r[1] + K[i][2] * r[2];
+            const double c0 = Rv[0][i], c1 = Rv[1][i], c2 = Rv[2][i];
+            const double k0 = c0 * I[0][0] + c1 * I[1][0] + c2 * I[2][0];
+            const double k1 = c0 * I[0][1] + c1 * I[1][1] + c2 * I[2][1];
+            const double k2 = c0 * I[0][2] + c1 * I[1][2] + c2 * I[2][2];
+            dx[i] = k0 * r[0] + k1 * r[1] + k2 * r[2];
+            preal* Pi = P[i];
+            axpyx(Pi, Rv[0], (preal)-k0, n);
+            axpyx(Pi, Rv[1], (preal)-k1, n);
+            axpyx(Pi, Rv[2], (preal)-k2, n);
         }
-        for (int i = 0; i < n; i++)
-            for (int j = i; j < n; j++) {
-                const double val = P[i][j] - (K[i][0] * P[6][j] + K[i][1] * P[7][j] + K[i][2] * P[8][j]);
-                P[i][j] = val; P[j][i] = val;
-            }
         apply_correction(dx);
     }
 
@@ -863,7 +1101,7 @@ struct Estimator {
 #if !defined(__wasm__) && defined(P_PROF)
             t_ = __rdtsc();
 #endif
-            const int got = feature_rows(f, rows);
+            const int got = feature_rows(f, rows, f.alive && f.slam < 0);
 #if !defined(__wasm__) && defined(P_PROF)
             prof_acc[3] += __rdtsc() - t_;
 #endif
@@ -909,7 +1147,7 @@ struct Estimator {
             make_template(win, bx, by, bx, by, f.tpl);
             if (!f.tpl.ok) continue;
             nfeats++;
-            f.id = next_feat_id++; f.x = (float)bx; f.y = (float)by; f.nobs = 0; f.alive = true; f.has_pw = false;
+            f.id = next_feat_id++; f.x = (float)bx; f.y = (float)by; f.nobs = 0; f.alive = true; f.has_pw = false; f.slam = -1;
         }
         detect_cell = (detect_cell + std::max(searched, 1)) % (P_GRID_X * P_GRID_Y);
     }
@@ -947,6 +1185,7 @@ struct Estimator {
             if (P_VPRIOR_SIGMA > 0 && !(P_SKIP & 4) && (light || !P_BALANCE)) velocity_prior(vp_sigma);
             twice(1, [&] { track(rgb, R_prev, p_prev); });
             PROF_BEGIN(); if (!(P_SKIP & 1)) track(rgb, R_prev, p_prev); PROF_END(1);
+            if (P_SLAM > 0) { drop_dead_slam(); if (light && frame % P_SLAM_EVERY == 1 % P_SLAM_EVERY) slam_update(); }
             const bool clone_frame = frame % P_CLONE_EVERY == 0;
             if (P_SPLIT == 2) {
                 // rows on the frame before a clone frame; at the clone frame: EKF update, drop the oldest clone, add the new one
@@ -1057,6 +1296,7 @@ struct Estimator {
             if (feats[k].alive && (feats[k].nobs == 0 || feats[k].obs[feats[k].nobs - 1].clone_id != id)) push_obs(feats[k]);
     }
     void push_obs(Feature& f) {
+        if (f.slam >= 0) return;
         const int id = clones[nclones - 1].id;
         if (f.nobs == MAX_OBS) { for (int q = 1; q < f.nobs; q++) f.obs[q - 1] = f.obs[q]; f.nobs--; }
         double u, vv; pixel_to_norm(f.x, f.y, u, vv);
@@ -1217,6 +1457,12 @@ VIOBENCH_EXPORT(init) int32_t init(const char* json, uint32_t length) {
 
 #ifndef __wasm__
 // host diagnostics: [frame, nfeats, nclones, tracked, lost, cand, tri_fail, chi_fail, used, rows, v(3), bg(3), ba(3), g(3), sd_v(3), sd_tilt]
+int32_t debug_set_velocity(const double* vw, double sigma) {  // host oracle tests: velocity in the IMU-0 frame
+    Estimator& e = *estimator;
+    e.v = V3{vw[0], vw[1], vw[2]};
+    for (int i = 0; i < 3; i++) { for (int j = 0; j < NMAX; j++) { P[6 + i][j] = 0; P[j][6 + i] = 0; } P[6 + i][6 + i] = sigma * sigma; }
+    return 0;
+}
 int32_t debug_prof(double* o) {
 #ifdef P_PROF
     for (int i = 0; i < 8; i++) { o[i] = (double)prof_acc[i]; prof_acc[i] = 0; }
@@ -1228,7 +1474,7 @@ int32_t debug_state(double* o) {
     double vals[] = {(double)e.frame, (double)e.nfeats, (double)e.nclones, (double)e.st_tracked, (double)e.st_lost, (double)e.st_cand,
                      (double)e.st_tri_fail, (double)e.st_chi_fail, (double)e.st_used, (double)e.st_rows,
                      e.v.x, e.v.y, e.v.z, e.bg.x, e.bg.y, e.bg.z, e.ba.x, e.ba.y, e.ba.z, e.g.x, e.g.y, e.g.z,
-                     std::sqrt(P[6][6]), std::sqrt(P[7][7]), std::sqrt(P[8][8]), std::sqrt(P[15][15]), (double)e.st_last_m, (double)e.st_last_rows, (double)e.st_last_ni};
+                     std::sqrt(P[6][6]), std::sqrt(P[7][7]), std::sqrt(P[8][8]), std::sqrt(P[15][15]), (double)e.st_last_m, (double)e.st_last_rows, (double)e.st_last_ni, (double)e.nslam, (double)e.st_slam_init, (double)e.st_slam_upd};
     e.st_last_m = e.st_last_rows = e.st_last_ni = 0;
     for (unsigned i = 0; i < sizeof(vals) / sizeof(double); i++) o[i] = vals[i];
     return 0;
