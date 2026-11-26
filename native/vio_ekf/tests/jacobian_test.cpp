@@ -1,4 +1,6 @@
 // Numerical check of the projected MSCKF rows: g++ -O1 -I../../viobench/viobench/solution/runtime/native -I. tests/jacobian_test.cpp
+#define P_RHO_SIGMA 0
+#define P_CLONES 5
 #include "../solution.cpp"
 #include <cstdio>
 int main() {
@@ -24,8 +26,8 @@ int main() {
     }
     int m = e.feature_rows(f, 0);
     std::printf("rows %d, residual", m);
-    double H0[8][NMAX], r0[8];
-    for (int i = 0; i < m; i++) { r0[i] = e.rs[i]; std::printf(" %.2e", r0[i]); for (int c = 0; c < NMAX; c++) H0[i][c] = e.Hs[i][c]; }
+    double H0[8][6 * (P_CLONES + 1)], r0[8];
+    for (int i = 0; i < m; i++) { r0[i] = e.rs[i]; std::printf(" %.2e", r0[i]); for (int c = 0; c < 6 * (P_CLONES + 1); c++) H0[i][c] = e.Hs[i][c]; }
     std::printf("\n");
     const double eps = 1e-6;
     double maxerr = 0, maxval = 0;
@@ -37,7 +39,7 @@ int main() {
             int m2 = e.feature_rows(f, 0);
             for (int i = 0; i < m2 && i < m; i++) {
                 const double num = -(e.rs[i] - r0[i]) / eps;  // r = z - h  =>  dr = -H dx
-                const double ana = H0[i][NI + 6 * k + j];
+                const double ana = H0[i][6 * k + j];
                 maxerr = std::max(maxerr, std::fabs(num - ana)); maxval = std::max(maxval, std::fabs(ana));
                 if (std::fabs(num - ana) > 1e-3 * (1 + std::fabs(ana))) std::printf("clone %d dof %d row %d: num %.5f ana %.5f\n", k, j, i, num, ana);
             }

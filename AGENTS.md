@@ -1,6 +1,6 @@
 # Agent handoff — EECS 116 Final
 
-Last updated: November 23, 2026 (America/Los_Angeles), after both submissions. Sections below are dated; earlier ones are
+Last updated: November 26, 2026 (America/Los_Angeles), stage 3 preparation on `victor/stage3`. Sections below are dated; earlier ones are
 snapshots and some of their "not yet" statements are superseded by later sections.
 
 ## Goal and conversation context
@@ -221,6 +221,41 @@ Sim(3) ATE is only a diagnostic now, so the step length must be in metres. Recor
   other teams can read. Push only `main` and tags there; working branches stay in the team repository.
 - Not merged into `main`: `qr/1115-screening`, `victor/learned-speed` (superseded), and Christopher's unpushed
   attempt (not to be merged, per Christopher).
+
+## Update, November 26, 2026: stage 3 preparation (branch `victor/stage3`, nothing submitted)
+
+Stage 3 (TA announcement): same trajectory distribution as stage 2, FoV U(75, 135) deg per episode, motion blur with
+exposure U(0, 50) ms, 12/24 episodes in rooms, 6 in a large empty warehouse, 6 in a forest (`private_stage3`, 24 hashes in
+upstream `viobench` `bc4de31`; the pin is still `17303aa`). Details, results and the list of ideas taken from the class's
+stage 2 slides: `results/stage3/README.md`.
+
+- New estimator `native/vio_ekf` (C++, no OpenCV): MSCKF-style EKF with gravity in the state (world = IMU frame at
+  frame 0, so in-flight starts need no rest or level assumption), 3 clones, green-channel patch tracking, null-space
+  updates, optional SLAM points. Every option is a `P_*` define in `native/vio_ekf/params.h`;
+  `scripts/build_ekf_variant.sh <name> P_X=v ...` builds `work/ekf/<name>.wasm`; `scripts/build_stage3.sh` builds the
+  candidates. Host loop (no fuel, ~10 s for 10 episodes): `scripts/host_native.py`, sweeps `scripts/ekf_sweep.sh`,
+  traces `scripts/host_debug.py`, per-section host cycles `scripts/host_prof.py`, per-frame sandbox fuel
+  `scripts/fuel_trace.py`, multi-set sandbox evaluation `scripts/eval_sets.py` (no videos).
+- Why: `r4_clamp` has 68-108 deg rotation error on in-flight starts (its gravity comes from a start at rest), which is
+  most of its 4.13 m stage 2 error. The EKF has 2-15 deg on the same flights.
+- Episode generation: `scripts/make_stage3_episodes.sh <out> <seconds> "<scene>|<seed>" ...` (4 flights per job, faster
+  autopilot patch applied only while running, first 5 s cropped, FoV and blur as announced). About 6 frames/min per job
+  with 4 jobs; 16 x 45 s took about 2.7 h and about 1 GB. No warehouse or forest scenes exist in the public catalogs.
+- `host_native.py` episode specs `path@start:duration:scale` crop and scale episodes in memory (scale k = same flight in
+  a k-times larger scene), and `GYRO_CLIP=x` clips the gyro (saturation test).
+- Findings: (1) metric scale from the IMU is weak with 0.15-0.3 s clone windows: even with perfect synthetic features
+  (`scripts/host_synth.py`) the filter needs ~10 s of maneuvering to converge, and the first update linearised at v = 0
+  locks a wrong velocity with high confidence. (2) The inverse-depth prior (3 m) and the zero-mean velocity prior are
+  what make indoor flights work, but they make the filter underestimate motion in larger scenes (2.5x scaled flights).
+  (3) SLAM points help the scaled flights and hurt some indoor ones. (4) A linear VI initialization (Martinelli-style,
+  `P_VI_INIT`) is mathematically right (checked in Python) but too ill-conditioned over 1 s of gentle flight; off.
+  (5) Gyro saturation detection (`P_CLIP_SIGMA`) recovers most of the loss from a clipped gyro; on by default.
+- Fuel: WASM is a stack machine (about 7 instructions per multiply-add even with f64x2), so fuel follows operation
+  counts: about 0.3 M per frame is propagation + tracking, the update adds 0.2-1 M with its rows x state size. 10k fuel
+  is below the cost of any covariance filter here (a 36-state covariance update alone is tens of thousands).
+- Not done: server submission, warehouse/forest data, learned components, the fuel goal of 10k.
+
+STAGE3_RESULTS_PLACEHOLDER
 
 ## Not completed or not known
 
