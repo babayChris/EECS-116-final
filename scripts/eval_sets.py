@@ -32,15 +32,19 @@ def zero_ate(paths):
 def evaluate(name, wasm, set_name, directory):
     out = ROOT / "outputs" / "sets" / set_name / name
     out.parent.mkdir(parents=True, exist_ok=True)
-    cmd = [str(ROOT / ".venv-vio/bin/viobench"), "evaluate", str(wasm)] + ([] if directory == "public" else [str(directory)]) + ["-o", str(out)]
+    # without -o the evaluator writes ./report-<wasm name>/ and no trajectory videos
+    out.mkdir(parents=True, exist_ok=True)
+    wasm = Path(wasm).resolve()
+    cmd = [str(ROOT / ".venv-vio/bin/viobench"), "evaluate", str(wasm)] + ([] if directory == "public" else [str(Path(directory).resolve())])
     log = out.with_suffix(".log")
     import os
     env = {**os.environ, "CONTA_CACHE": os.environ.get("CONTA_CACHE", str(ROOT / "work/conta-cache"))}
     with open(log, "w") as f:
-        r = subprocess.run(cmd, stdout=f, stderr=subprocess.STDOUT, env=env)
-    if r.returncode != 0:
+        r = subprocess.run(cmd, stdout=f, stderr=subprocess.STDOUT, env=env, cwd=out)
+    report = out / f"report-{wasm.stem}" / "report.json"
+    if r.returncode != 0 or not report.exists():
         return name, set_name, None
-    rep = json.loads((out / "report.json").read_text())
+    rep = json.loads(report.read_text())
     eps = rep["episodes"]
     return name, set_name, {
         "ate_mean": float(np.mean([e["metrics"]["ate_rmse"] for e in eps])),
