@@ -354,7 +354,7 @@ struct Estimator {
     int st_tracked = 0, st_lost = 0, st_cand = 0, st_tri_fail = 0, st_chi_fail = 0, st_used = 0, st_rows = 0;
 
     // SLAM points: world xyz in the state between the IMU block and the clones
-    int nslam = 0;
+    int nslam = 0, slam_rr = 0;
     V3 slam_p[P_SLAM > 0 ? P_SLAM : 1];
     int slam_bad[P_SLAM > 0 ? P_SLAM : 1];
     int C0() const { return NI + 3 * nslam; }  // first clone column
@@ -950,9 +950,12 @@ struct Estimator {
         int col[MS][9]; double h[MS][9]; double r[MS]; int m = 0;
         const M3 Rt = R.t();
         const M3 A = R_ci * Rt;
-        for (int k = 0; k < nfeats; k++) {
+        int considered = 0;
+        for (int q0 = 0; q0 < nfeats; q0++) {
+            const int k = (q0 + slam_rr) % nfeats;  // round-robin over the points when capped
             const Feature& f = feats[k];
             if (!f.alive || f.slam < 0) continue;
+            if (considered++ >= P_SLAM_MAXUPD) break;
             const int j = f.slam;
             const V3 Pw = slam_p[j];
             const V3 Pc = A * (Pw - p) + t_ci;
@@ -1032,6 +1035,7 @@ struct Estimator {
             CHECKPSD("after slam update");
             st_slam_upd += m / 2;
         }
+        slam_rr += P_SLAM_MAXUPD;
         for (int j = nslam - 1; j >= 0; j--) if (slam_bad[j] >= 2) remove_slam(j);
     }
 
@@ -1052,6 +1056,25 @@ struct Estimator {
         if (bad >= 0 || asym > 1e-9) std::fprintf(stderr, "frame %d %s: not PD at %d (min pivot %.3g), asym %.3g, nslam %d nclones %d\n", frame, where, bad, minp, asym, nslam, nclones);
     }
 #endif
+
+    // vertical velocity pseudo-measurement: h = g^T v / |g| = 0 (rows on v and g)
+    void vertical_prior(double sigma) {
+        const int n = dim();
+        const double gn = norm(g);
+        const V3 gh = g * (1.0 / gn);
+        const double z = -dot(gh, v);  // residual 0 - h
+        double hcol[6]; int cidx[6];
+        const V3 dg = (v - gh * dot(gh, v)) * (1.0 / gn);  // d(gh.v)/dg
+        for (int q = 0; q < 3; q++) { cidx[q] = 6 + q; hcol[q] = gh[q]; cidx[3 + q] = 15 + q; hcol[3 + q] = dg[q]; }
+        static preal ph[NMAX];
+        double S = sigma * sigma;
+        for (int i = 0; i < n; i++) { double s2 = 0; for (int q = 0; q < 6; q++) s2 += P[i][cidx[q]] * hcol[q]; ph[i] = (preal)s2; }
+        for (int q = 0; q < 6; q++) S += hcol[q] * ph[cidx[q]];
+        double dx[NMAX];
+        for (int i = 0; i < n; i++) dx[i] = ph[i] * z / S;
+        for (int i = 0; i < n; i++) axpyx(P[i], ph, (preal)(-ph[i] / S), n);
+        apply_correction(dx);
+    }
 
     void drop_dead_slam() {
         for (int k = 0; k < nfeats; k++) if (!feats[k].alive && feats[k].slam >= 0) remove_slam(feats[k].slam);
@@ -1183,6 +1206,7 @@ struct Estimator {
             const double vp_sigma = P_BALANCE && P_SPLIT ? P_VPRIOR_SIGMA / std::sqrt((double)P_CLONE_EVERY) : P_VPRIOR_SIGMA;
             twice(4, [&] { velocity_prior(vp_sigma); });
             if (P_VPRIOR_SIGMA > 0 && !(P_SKIP & 4) && (light || !P_BALANCE)) velocity_prior(vp_sigma);
+            if (P_VZ_SIGMA > 0 && (light || !P_BALANCE)) vertical_prior(P_BALANCE && P_SPLIT ? P_VZ_SIGMA / std::sqrt((double)P_CLONE_EVERY) : P_VZ_SIGMA);
             twice(1, [&] { track(rgb, R_prev, p_prev); });
             PROF_BEGIN(); if (!(P_SKIP & 1)) track(rgb, R_prev, p_prev); PROF_END(1);
             if (P_SLAM > 0) { drop_dead_slam(); if (light && frame % P_SLAM_EVERY == 1 % P_SLAM_EVERY) slam_update(); }
@@ -1284,6 +1308,7 @@ struct Estimator {
             if (clone_frame) record_obs_new();
         }
         frame++;
+        if (P_WATCHDOG) watchdog();
         write_output(out);
     }
 
@@ -1333,6 +1358,31 @@ struct Estimator {
             }
             if (ok) st_tracked++; else { f.alive = false; st_lost++; }
         }
+    }
+
+    // last good pose; a non-finite or absurd state restarts the filter from it (velocity zero, fresh covariance)
+    M3 good_R = M3::eye(); V3 good_p{0, 0, 0}; V3 good_g{0, 0, -GRAVITY}; V3 good_bg{0, 0, 0};
+    int resets = 0;
+    void watchdog() {
+        bool ok = std::isfinite(p.x + p.y + p.z + v.x + v.y + v.z) && std::isfinite(R.m[0][0] + R.m[1][1] + R.m[2][2]) && norm(v) < 0.99 * P_MAX_SPEED;
+        for (int i = 0; i < NI && ok; i++) ok = std::isfinite((double)P[i][i]) && P[i][i] < 1e4;
+        if (ok) { good_R = R; good_p = p; good_g = g; good_bg = bg; return; }
+        resets++;
+        R = good_R; p = good_p; v = V3{0, 0, 0}; g = good_g; bg = good_bg; ba = V3{0, 0, 0};
+        nclones = 0; nslam = 0; pending_m = 0;
+        for (int k = 0; k < nfeats; k++) { feats[k].nobs = 0; feats[k].slam = -1; }
+        std::memset(P, 0, sizeof(P));
+        const double sg = GRAVITY * P_INIT_TILT;
+        const V3 gh = g * (1.0 / norm(g));
+        for (int i = 0; i < 3; i++) {
+            P[i][i] = 0.01;  // attitude: the restart point is uncertain
+            P[3 + i][3 + i] = 0.25;
+            for (int j = 0; j < 3; j++) P[15 + i][15 + j] = sg * sg * ((i == j) - gh[i] * gh[j]) + 0.01 * gh[i] * gh[j];
+            P[6 + i][6 + i] = P_INIT_VEL * P_INIT_VEL;
+            P[9 + i][9 + i] = P_INIT_BG * P_INIT_BG;
+            P[12 + i][12 + i] = P_INIT_BA * P_INIT_BA;
+        }
+        add_clone();
     }
 
     void init_state(const double* imu, int count) {

@@ -176,3 +176,12 @@
 #ifndef P_SLAM_ROWS
 #define P_SLAM_ROWS 1       // a new SLAM point's remaining (null-space) rows also update the state
 #endif
+#ifndef P_VZ_SIGMA
+#define P_VZ_SIGMA 0        // m/s per frame: vertical velocity pseudo-measurement (0 = off)
+#endif
+#ifndef P_SLAM_MAXUPD
+#define P_SLAM_MAXUPD 8     // SLAM points per update (round-robin when there are more)
+#endif
+#ifndef P_WATCHDOG
+#define P_WATCHDOG 1        // restart the filter from the last good pose on a non-finite or runaway state
+#endif
