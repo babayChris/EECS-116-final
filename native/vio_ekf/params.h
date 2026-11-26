@@ -72,7 +72,7 @@
 #define P_ACC_NOISE 0.04    // m/s^2/sqrt(Hz)
 #endif
 #ifndef P_GYRO_WALK
-#define P_GYRO_WALK 2e-4    // rad/s^2/sqrt(Hz)
+#define P_GYRO_WALK 1e-3    // rad/s^2/sqrt(Hz)
 #endif
 #ifndef P_ACC_WALK
 #define P_ACC_WALK 2e-3     // m/s^3/sqrt(Hz)
@@ -184,4 +184,28 @@
 #endif
 #ifndef P_WATCHDOG
 #define P_WATCHDOG 1        // restart the filter from the last good pose on a non-finite or runaway state
+#endif
+#ifndef P_SLAM_VSIG
+#define P_SLAM_VSIG 1e9     // SLAM points only once the velocity std is below this (m/s)
+#endif
+#ifndef P_VI_INIT
+#define P_VI_INIT 0         // frames of linear visual-inertial initialization before the filter starts (0 = off)
+#endif
+#ifndef P_VI_MAX
+#define P_VI_MAX 60         // give up the initialization after this many frames
+#endif
+#ifndef P_VI_RETRY
+#define P_VI_RETRY 5        // frames between solve attempts after P_VI_INIT
+#endif
+#ifndef P_VI_MINFEAT
+#define P_VI_MINFEAT 6      // points with >= 3 observations needed for a solve
+#endif
+#ifndef P_VI_MINSPAN
+#define P_VI_MINSPAN 6      // frames a point must span to enter the solve
+#endif
+#ifndef P_VI_VSIG
+#define P_VI_VSIG 0.2       // velocity std after the initialization
+#endif
+#ifndef P_VI_TILT
+#define P_VI_TILT 0.05      // tilt std after the initialization (rad)
 #endif

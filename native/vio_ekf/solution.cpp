@@ -327,6 +327,12 @@ struct Feature {
 
 struct Clone { int id; M3 R; V3 p; };
 
+#ifndef __wasm__
+static int ext_n = -1;          // host test hook: >= 0 replaces tracking/detection by these observations
+static int ext_id[256];
+static float ext_x[256], ext_y[256];
+#endif
+
 #if P_FLOATCOV
 typedef float preal;
 #else
@@ -611,7 +617,8 @@ struct Estimator {
         // (little parallax) keep the inverse-depth prior
         PROF_BEGIN();
         bool prior = P_RHO_SIGMA > 0;
-        if (want_slam && P_SLAM > 0 && nslam < P_SLAM && triangulate(f, Pw, abr, &Ra, false) && abr[3] < P_SLAM_REL * abr[2]) {
+        const bool v_known = P[6][6] + P[7][7] + P[8][8] < 3 * P_SLAM_VSIG * P_SLAM_VSIG;
+        if (want_slam && P_SLAM > 0 && nslam < P_SLAM && v_known && triangulate(f, Pw, abr, &Ra, false) && abr[3] < P_SLAM_REL * abr[2]) {
             prior = false; slam_mode = true;
         } else if (prior && P_PRIOR_SWITCH > 0 && triangulate(f, Pw, abr, &Ra, false) && abr[3] < P_PRIOR_SWITCH * abr[2]) {
             prior = false;
@@ -1175,6 +1182,160 @@ struct Estimator {
         detect_cell = (detect_cell + std::max(searched, 1)) % (P_GRID_X * P_GRID_Y);
     }
 
+    // ---------------------------------------------------------------- visual-inertial initialization
+    // Linear closed form (Martinelli-style): over the first frames, camera positions are p_i = v0 t_i + g t_i^2 / 2 +
+    // dp_i (dp_i: double integral of the rotated specific force, gyro attitude R_i). Each bearing d_ij of point P_j gives
+    // [d_ij]x (P_j - p_i - R_i t_ic) = 0, linear in (P_j, v0, g); points are eliminated (Schur), g is then fixed to 9.81 m/s^2.
+    static constexpr int VI_MAXF = P_VI_MAX + 1;
+    static constexpr int VI_MAXO = VI_MAXF * P_MAX_FEAT;
+    bool vi_active = P_VI_INIT > 0;
+    int vi_nf = 0, vi_no = 0;
+    double vi_t[VI_MAXF]; M3 vi_R[VI_MAXF]; V3 vi_dp[VI_MAXF], vi_dv[VI_MAXF];
+    struct VIObs { int id, fi; float u, v; };
+    VIObs vi_obs[VI_MAXO];
+    V3 vi_dv_acc{0, 0, 0}, vi_dp_acc{0, 0, 0};
+    double vi_t0 = 0;
+    int vi_status = 0;  // diagnostics: 1 solved, -1 gave up
+
+    void vi_accumulate(const double* imu, int count, const M3& R_start) {  // integrals of R f over this frame's samples
+        M3 Ri = R_start;
+        double tl = vi_t0 + vi_t[vi_nf - 1];
+        for (int i = 0; i < count; i++) {
+            const double* r = imu + 7 * i;
+            const double dt = r[0] - tl;
+            tl = r[0];
+            if (dt <= 0 || dt > 0.1) continue;
+            const V3 a = Ri * V3{r[1], r[2], r[3]};
+            vi_dp_acc = vi_dp_acc + vi_dv_acc * dt + a * (0.5 * dt * dt);
+            vi_dv_acc = vi_dv_acc + a * dt;
+            Ri = Ri * expso3(V3{r[4] - bg.x, r[5] - bg.y, r[6] - bg.z} * dt);
+        }
+    }
+
+    void vi_record(double t) {
+        vi_t[vi_nf] = t - vi_t0; vi_R[vi_nf] = R; vi_dp[vi_nf] = vi_dp_acc; vi_dv[vi_nf] = vi_dv_acc;
+        for (int k = 0; k < nfeats && vi_no < VI_MAXO; k++)
+            if (feats[k].alive) {
+                double u, vv; pixel_to_norm(feats[k].x, feats[k].y, u, vv);
+                vi_obs[vi_no++] = {feats[k].id, vi_nf, (float)u, (float)vv};
+            }
+        vi_nf++;
+    }
+
+    static void inv3(const double A[3][3], double B[3][3]) {
+        const double det = A[0][0] * (A[1][1] * A[2][2] - A[1][2] * A[2][1]) - A[0][1] * (A[1][0] * A[2][2] - A[1][2] * A[2][0]) + A[0][2] * (A[1][0] * A[2][1] - A[1][1] * A[2][0]);
+        const double id = std::fabs(det) > 1e-300 ? 1.0 / det : 0.0;
+        B[0][0] = (A[1][1] * A[2][2] - A[1][2] * A[2][1]) * id; B[0][1] = (A[0][2] * A[2][1] - A[0][1] * A[2][2]) * id; B[0][2] = (A[0][1] * A[1][2] - A[0][2] * A[1][1]) * id;
+        B[1][0] = (A[1][2] * A[2][0] - A[1][0] * A[2][2]) * id; B[1][1] = (A[0][0] * A[2][2] - A[0][2] * A[2][0]) * id; B[1][2] = (A[0][2] * A[1][0] - A[0][0] * A[1][2]) * id;
+        B[2][0] = (A[1][0] * A[2][1] - A[1][1] * A[2][0]) * id; B[2][1] = (A[0][1] * A[2][0] - A[0][0] * A[2][1]) * id; B[2][2] = (A[0][0] * A[1][1] - A[0][1] * A[1][0]) * id;
+    }
+
+    // returns true and the initial velocity (IMU-0 frame) and gravity when the solve is usable
+    bool vi_solve(V3& v0, V3& g0) {
+        double Hxx[6][6] = {}, bx[6] = {};
+        int used = 0;
+        // features: group observations by id (obs are stored frame by frame)
+        static int done_id[VI_MAXO]; int ndone = 0;
+        for (int o = 0; o < vi_no; o++) {
+            const int id = vi_obs[o].id;
+            bool seen = false;
+            for (int q = 0; q < ndone; q++) if (done_id[q] == id) { seen = true; break; }
+            if (seen) continue;
+            done_id[ndone++] = id;
+            double Hjj[3][3] = {}, Hjx[3][6] = {}, bj[3] = {};
+            double Hxx_j[6][6] = {}, bx_j[6] = {};
+            int nobs = 0, first = -1, last = -1;
+            for (int q = o; q < vi_no; q++) {
+                if (vi_obs[q].id != id) continue;
+                const int i = vi_obs[q].fi;
+                if (first < 0) first = i;
+                last = i;
+                V3 d = vi_R[i] * (R_ic * V3{vi_obs[q].u, vi_obs[q].v, 1.0});
+                d = d * (1.0 / norm(d));
+                const M3 D = skew(d);
+                const V3 c = vi_dp[i] + vi_R[i] * t_ic;
+                const double ti = vi_t[i];
+                // e = D P + B x - y,  B = -D [ti I | ti^2/2 I], y = D c
+                double Bm[3][6];
+                for (int a = 0; a < 3; a++) for (int b = 0; b < 3; b++) { Bm[a][b] = -D.m[a][b] * ti; Bm[a][3 + b] = -D.m[a][b] * 0.5 * ti * ti; }
+                const V3 y = D * c;
+                for (int a = 0; a < 3; a++) {
+                    for (int b = 0; b < 3; b++) { double s2 = 0; for (int k = 0; k < 3; k++) s2 += D.m[k][a] * D.m[k][b]; Hjj[a][b] += s2; }
+                    for (int b = 0; b < 6; b++) { double s2 = 0; for (int k = 0; k < 3; k++) s2 += D.m[k][a] * Bm[k][b]; Hjx[a][b] += s2; }
+                    double s2 = 0; for (int k = 0; k < 3; k++) s2 += D.m[k][a] * y[k]; bj[a] += s2;
+                }
+                for (int a = 0; a < 6; a++) {
+                    for (int b = 0; b < 6; b++) { double s2 = 0; for (int k = 0; k < 3; k++) s2 += Bm[k][a] * Bm[k][b]; Hxx_j[a][b] += s2; }
+                    double s2 = 0; for (int k = 0; k < 3; k++) s2 += Bm[k][a] * y[k]; bx_j[a] += s2;
+                }
+                nobs++;
+            }
+            if (nobs < 3 || last - first < P_VI_MINSPAN) continue;
+            double Hi[3][3]; inv3(Hjj, Hi);
+            // Schur: Hxx -= Hjx^T Hjj^-1 Hjx ; bx -= Hjx^T Hjj^-1 bj   (sign: normal equations of e = D P + B x - y)
+            double T1[3][6];
+            for (int a = 0; a < 3; a++) for (int b = 0; b < 6; b++) { double s2 = 0; for (int k = 0; k < 3; k++) s2 += Hi[a][k] * Hjx[k][b]; T1[a][b] = s2; }
+            double t2[3];
+            for (int a = 0; a < 3; a++) { double s2 = 0; for (int k = 0; k < 3; k++) s2 += Hi[a][k] * bj[k]; t2[a] = s2; }
+            for (int a = 0; a < 6; a++) {
+                for (int b = 0; b < 6; b++) { double s2 = 0; for (int k = 0; k < 3; k++) s2 += Hjx[k][a] * T1[k][b]; Hxx[a][b] += Hxx_j[a][b] - s2; }
+                double s2 = 0; for (int k = 0; k < 3; k++) s2 += Hjx[k][a] * t2[k]; bx[a] += bx_j[a] - s2;
+            }
+            used++;
+        }
+        if (used < P_VI_MINFEAT) return false;
+        // normal equations: Hxx x = bx  (from min |D P + B x - y|^2 after eliminating P)
+        // full solve for g direction, then fix |g| and solve v0
+        double A[6][7];
+        for (int a = 0; a < 6; a++) { for (int b = 0; b < 6; b++) A[a][b] = Hxx[a][b]; A[a][6] = bx[a]; }
+        for (int c = 0; c < 6; c++) {
+            int piv = c;
+            for (int r = c + 1; r < 6; r++) if (std::fabs(A[r][c]) > std::fabs(A[piv][c])) piv = r;
+            if (std::fabs(A[piv][c]) < 1e-12) return false;
+            for (int k = 0; k < 7; k++) std::swap(A[c][k], A[piv][k]);
+            for (int r = 0; r < 6; r++) if (r != c) { const double f2 = A[r][c] / A[c][c]; for (int k = c; k < 7; k++) A[r][k] -= f2 * A[c][k]; }
+        }
+        double x[6];
+        for (int a = 0; a < 6; a++) x[a] = A[a][6] / A[a][a];
+        V3 gs{x[3], x[4], x[5]};
+        const double gn = norm(gs);
+        if (!(gn > 0.5 * GRAVITY && gn < 1.5 * GRAVITY)) return false;
+        g0 = gs * (GRAVITY / gn);
+        // v0 with g fixed: Hvv v = bv - Hvg g
+        double Hv[3][3], rhs[3];
+        for (int a = 0; a < 3; a++) {
+            for (int b = 0; b < 3; b++) Hv[a][b] = Hxx[a][b];
+            rhs[a] = bx[a] - (Hxx[a][3] * g0.x + Hxx[a][4] * g0.y + Hxx[a][5] * g0.z);
+        }
+        double Hvi[3][3]; inv3(Hv, Hvi);
+        v0 = V3{Hvi[0][0] * rhs[0] + Hvi[0][1] * rhs[1] + Hvi[0][2] * rhs[2], Hvi[1][0] * rhs[0] + Hvi[1][1] * rhs[1] + Hvi[1][2] * rhs[2],
+                Hvi[2][0] * rhs[0] + Hvi[2][1] * rhs[1] + Hvi[2][2] * rhs[2]};
+        return std::isfinite(v0.x + v0.y + v0.z) && norm(v0) < P_MAX_SPEED;
+    }
+
+    void vi_finish(const V3& v0, const V3& g0) {
+        const int i = vi_nf - 1;
+        const double ti = vi_t[i];
+        g = g0;
+        v = v0 + g0 * ti + vi_dv[i];
+        p = v0 * ti + g0 * (0.5 * ti * ti) + vi_dp[i];
+        nclones = 0; nslam = 0; pending_m = 0;
+        for (int k = 0; k < nfeats; k++) { feats[k].nobs = 0; feats[k].slam = -1; }
+        std::memset(P, 0, sizeof(P));
+        const double sg = GRAVITY * P_VI_TILT;
+        const V3 gh = g * (1.0 / GRAVITY);
+        for (int a = 0; a < 3; a++) {
+            P[a][a] = 1e-6;
+            P[3 + a][3 + a] = 1e-4;
+            for (int b = 0; b < 3; b++) P[15 + a][15 + b] = sg * sg * ((a == b) - gh[a] * gh[b]) + 0.01 * gh[a] * gh[b];
+            P[6 + a][6 + a] = P_VI_VSIG * P_VI_VSIG;
+            P[9 + a][9 + a] = P_INIT_BG * P_INIT_BG;
+            P[12 + a][12 + a] = P_INIT_BA * P_INIT_BA;
+        }
+        add_clone();
+        record_obs();
+    }
+
     // fuel attribution: run `fn` once on a saved copy of the estimator and P, then restore (P_DOUBLE bitmask)
     template <class F> void twice(int bit, F fn) {
         if (!(P_DOUBLE & bit)) return;
@@ -1193,9 +1354,47 @@ struct Estimator {
         if (frame == 0) {
             init_state(imu, count);
             t_last = t;
+            vi_t0 = t;
             add_clone();
+#ifndef __wasm__
+            if (ext_n >= 0) external_features(); else
+#endif
             detect(rgb, P_DETECT_CELLS_FIRST);
             record_obs();
+            if (vi_active) vi_record(t);
+        } else if (vi_active) {
+            // initialization window: gyro attitude, front end, IMU integrals; no filter updates
+            const M3 R_prev = R; const V3 p_prev = p;
+            vi_accumulate(imu, count, R);
+            propagate(imu, count);
+#ifndef __wasm__
+            if (ext_n >= 0) external_features(); else
+#endif
+            track(rgb, R_prev, p_prev);
+            int w = 0;
+            for (int k = 0; k < nfeats; k++) if (feats[k].alive) feats[w++] = feats[k];
+            nfeats = w;
+#ifndef __wasm__
+            if (ext_n < 0)
+#endif
+            detect(rgb, P_DETECT_CELLS);
+            vi_record(t);
+            if (vi_nf > P_VI_INIT && (vi_nf - 1) % P_VI_RETRY == 0) {
+                V3 v0, g0;
+                if (vi_solve(v0, g0)) {
+#ifndef __wasm__
+                    if (getenv("VI_DEBUG")) std::fprintf(stderr, "vi solve at %d: v0 %.3f %.3f %.3f  g %.2f %.2f %.2f  (gravity before %.2f %.2f %.2f)\n", vi_nf, v0.x, v0.y, v0.z, g0.x, g0.y, g0.z, g.x, g.y, g.z);
+#endif
+                    vi_finish(v0, g0); vi_active = false; vi_status = 1;
+                }
+                else if (vi_nf >= P_VI_MAX) {  // give up: continue from the IMU-only state with a wide velocity prior
+                    vi_active = false; vi_status = -1;
+                    nclones = 0; for (int k = 0; k < nfeats; k++) feats[k].nobs = 0;
+                    v = V3{0, 0, 0};
+                    for (int a = 0; a < 3; a++) { for (int b = 0; b < NMAX; b++) { P[6 + a][b] = P[b][6 + a] = 0; } P[6 + a][6 + a] = P_INIT_VEL * P_INIT_VEL; }
+                    add_clone(); record_obs();
+                }
+            }
         } else {
             const M3 R_prev = R; const V3 p_prev = p;
             twice(8, [&] { propagate(imu, count); });
@@ -1208,7 +1407,10 @@ struct Estimator {
             if (P_VPRIOR_SIGMA > 0 && !(P_SKIP & 4) && (light || !P_BALANCE)) velocity_prior(vp_sigma);
             if (P_VZ_SIGMA > 0 && (light || !P_BALANCE)) vertical_prior(P_BALANCE && P_SPLIT ? P_VZ_SIGMA / std::sqrt((double)P_CLONE_EVERY) : P_VZ_SIGMA);
             twice(1, [&] { track(rgb, R_prev, p_prev); });
-            PROF_BEGIN(); if (!(P_SKIP & 1)) track(rgb, R_prev, p_prev); PROF_END(1);
+#ifndef __wasm__
+            if (ext_n >= 0) external_features(); else
+#endif
+            { PROF_BEGIN(); if (!(P_SKIP & 1)) track(rgb, R_prev, p_prev); PROF_END(1); }
             if (P_SLAM > 0) { drop_dead_slam(); if (light && frame % P_SLAM_EVERY == 1 % P_SLAM_EVERY) slam_update(); }
             const bool clone_frame = frame % P_CLONE_EVERY == 0;
             if (P_SPLIT == 2) {
@@ -1304,6 +1506,9 @@ struct Estimator {
             nfeats = w;
             }
             twice(2, [&] { detect(rgb, P_DETECT_CELLS); });
+#ifndef __wasm__
+            if (ext_n < 0)
+#endif
             PROF_BEGIN(); if (!(P_SKIP & 2) && light) detect(rgb, P_BALANCE && P_SPLIT ? P_DETECT_CELLS * P_CLONE_EVERY : P_DETECT_CELLS); PROF_END(2);
             if (clone_frame) record_obs_new();
         }
@@ -1311,6 +1516,25 @@ struct Estimator {
         if (P_WATCHDOG) watchdog();
         write_output(out);
     }
+
+#ifndef __wasm__
+    // host test hook: features = the external list (same id = same point); missing ids die, new ids are born
+    void external_features() {
+        for (int k = 0; k < nfeats; k++) {
+            int q = -1;
+            for (int e2 = 0; e2 < ext_n; e2++) if (ext_id[e2] == feats[k].id) { q = e2; break; }
+            if (q < 0) { feats[k].alive = false; st_lost++; }
+            else if (feats[k].alive) { feats[k].x = ext_x[q]; feats[k].y = ext_y[q]; st_tracked++; }
+        }
+        for (int e2 = 0; e2 < ext_n && nfeats < P_MAX_FEAT; e2++) {
+            bool have = false;
+            for (int k = 0; k < nfeats; k++) if (feats[k].id == ext_id[e2]) { have = true; break; }
+            if (have) continue;
+            Feature& f = feats[nfeats++];
+            f.id = ext_id[e2]; f.x = ext_x[e2]; f.y = ext_y[e2]; f.nobs = 0; f.alive = true; f.has_pw = false; f.slam = -1; f.tpl.ok = true;
+        }
+    }
+#endif
 
     void record_obs() {
         for (int k = 0; k < nfeats; k++) if (feats[k].alive) push_obs(feats[k]);
@@ -1405,12 +1629,12 @@ struct Estimator {
     void write_output(double* out) const {
         // T_c0_ck = T_ci * T_w_imu_k * T_ic   (world = IMU frame at frame 0)
         const M3 Rc = R_ci * R * R_ic;
-        const V3 pc = R_ci * (R * t_ic + p) + t_ci;
+        const V3 pc = vi_active ? V3{0, 0, 0} : R_ci * (R * t_ic + p) + t_ci;
         double q[4]; quaternion(Rc, q);
         out[0] = pc.x; out[1] = pc.y; out[2] = pc.z;
         out[3] = q[0]; out[4] = q[1]; out[5] = q[2]; out[6] = q[3];
         // camera centre velocity in world, then in camera-k axes
-        const V3 vc_w = v + R * cross(w_last, t_ic);
+        const V3 vc_w = (vi_active ? V3{0, 0, 0} : v) + R * cross(w_last, t_ic);
         const M3 Rwc = R * R_ic;
         const V3 vc = Rwc.t() * vc_w;
         const V3 wc = R_ci * w_last;
@@ -1507,6 +1731,11 @@ VIOBENCH_EXPORT(init) int32_t init(const char* json, uint32_t length) {
 
 #ifndef __wasm__
 // host diagnostics: [frame, nfeats, nclones, tracked, lost, cand, tri_fail, chi_fail, used, rows, v(3), bg(3), ba(3), g(3), sd_v(3), sd_tilt]
+int32_t debug_set_features(int32_t n, const int32_t* ids, const double* xy) {  // gray-resolution pixels
+    ext_n = n;
+    for (int i = 0; i < n && i < 256; i++) { ext_id[i] = ids[i]; ext_x[i] = (float)xy[2 * i]; ext_y[i] = (float)xy[2 * i + 1]; }
+    return 0;
+}
 int32_t debug_set_velocity(const double* vw, double sigma) {  // host oracle tests: velocity in the IMU-0 frame
     Estimator& e = *estimator;
     e.v = V3{vw[0], vw[1], vw[2]};
@@ -1524,7 +1753,7 @@ int32_t debug_state(double* o) {
     double vals[] = {(double)e.frame, (double)e.nfeats, (double)e.nclones, (double)e.st_tracked, (double)e.st_lost, (double)e.st_cand,
                      (double)e.st_tri_fail, (double)e.st_chi_fail, (double)e.st_used, (double)e.st_rows,
                      e.v.x, e.v.y, e.v.z, e.bg.x, e.bg.y, e.bg.z, e.ba.x, e.ba.y, e.ba.z, e.g.x, e.g.y, e.g.z,
-                     std::sqrt(P[6][6]), std::sqrt(P[7][7]), std::sqrt(P[8][8]), std::sqrt(P[15][15]), (double)e.st_last_m, (double)e.st_last_rows, (double)e.st_last_ni, (double)e.nslam, (double)e.st_slam_init, (double)e.st_slam_upd};
+                     std::sqrt(P[6][6]), std::sqrt(P[7][7]), std::sqrt(P[8][8]), std::sqrt(P[15][15]), (double)e.st_last_m, (double)e.st_last_rows, (double)e.st_last_ni, (double)e.nslam, (double)e.st_slam_init, (double)e.st_slam_upd, (double)e.vi_status, (double)e.vi_nf};
     e.st_last_m = e.st_last_rows = e.st_last_ni = 0;
     for (unsigned i = 0; i < sizeof(vals) / sizeof(double); i++) o[i] = vals[i];
     return 0;

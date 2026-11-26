@@ -23,14 +23,51 @@ def build(src, defines, out_dir=ROOT / "work/hostlib"):
     return lib
 
 
+def virtual_episode(spec):
+    """path[@start:duration[:scale]]: an episode cropped to start in motion and optionally scaled in space
+    (positions and true accelerations x scale, images unchanged: the same flight in a larger scene, flown faster)."""
+    from viobench.tools.datasets.sources import episodes
+    if "@" not in spec:
+        return next(episodes(spec))
+    sys.path.insert(0, str(ROOT / "scripts"))
+    from make_stage3_episodes import crop
+    from viobench.tools.datasets.episode import Episode, FrameSequence
+    path, rest = spec.split("@", 1)
+    parts = [float(x) for x in rest.split(":")]
+    start, dur = parts[0], parts[1]
+    k = parts[2] if len(parts) > 2 else 1.0
+    e = next(episodes(path))
+    if start > 0:
+        e = crop(e, start)
+    n = int(np.searchsorted(e.frame_times, e.frame_times[0] + dur))
+    fr = e.frames
+    seq = FrameSequence(lambda i, _f=fr: _f[i], n, fr.frame_shape)
+    t1 = e.frame_times[n - 1]
+    imu = e.imu[e.imu[:, 0] <= t1 + 1e-9].copy()
+    gt = e.ground_truth[e.ground_truth[:, 0] <= t1 + 0.05].copy()
+    T = e.T_body_camera.copy()
+    if k != 1.0:
+        t = gt[:, 0]; pos = gt[:, 1:4]
+        acc = np.gradient(np.gradient(pos, t, axis=0), t, axis=0)
+        x, y, z, w = gt[:, 4:8].T
+        R = np.stack([np.stack([1-2*(y*y+z*z), 2*(x*y-z*w), 2*(x*z+y*w)], -1), np.stack([2*(x*y+z*w), 1-2*(x*x+z*z), 2*(y*z-x*w)], -1),
+                      np.stack([2*(x*z-y*w), 2*(y*z+x*w), 1-2*(x*x+y*y)], -1)], -2)
+        ai = np.stack([np.interp(imu[:, 0], t, acc[:, j]) for j in range(3)], 1)
+        idx = np.clip(np.searchsorted(t, imu[:, 0]), 0, len(t) - 1)
+        imu[:, 1:4] += np.einsum("nji,nj->ni", R[idx], (k - 1) * ai)
+        gt[:, 1:4] = pos[0] + k * (pos - pos[0])
+        T[:3, 3] *= k
+    cfg = {**e.config, "episode": {**e.config["episode"], "num_frames": n}}
+    return Episode(name=e.name, config=cfg, frame_times=e.frame_times[:n], frames=seq, imu=imu, ground_truth=gt, T_body_camera=T, meta=e.meta)
+
+
 def run_episode(args):
     lib_path, source = args
-    from viobench.tools.datasets.sources import episodes
     from viobench.tools.runner.metrics import evaluate_trajectory
     lib = ctypes.CDLL(str(lib_path))
     lib.init.argtypes = [ctypes.c_char_p, ctypes.c_uint32]
     lib.step.argtypes = [ctypes.c_double, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int32, ctypes.c_void_p]
-    episode = next(episodes(source))
+    episode = virtual_episode(source)
     config, frames = episode.adapt((320, 240))
     blob = json.dumps(config).encode()
     if lib.init(blob, len(blob)) != 0:
@@ -69,7 +106,11 @@ def main():
     lib = build(a.src, a.D)
     eps = []
     for e in a.episodes:
-        eps += sorted(glob.glob(e)) if any(c in e for c in "*?") else [e]
+        if "@" in e and any(c in e.split("@")[0] for c in "*?"):
+            base, suffix = e.split("@", 1)
+            eps += [f"{x}@{suffix}" for x in sorted(glob.glob(base))]
+        else:
+            eps += sorted(glob.glob(e)) if any(c in e for c in "*?") else [e]
     with Pool(a.jobs) as pool:
         res = pool.map(run_episode, [(lib, e) for e in eps], chunksize=1)
     ate = np.array([r[1] for r in res])

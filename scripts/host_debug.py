@@ -12,7 +12,8 @@ lib.init.argtypes = [ctypes.c_char_p, ctypes.c_uint32]
 lib.step.argtypes = [ctypes.c_double, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int32, ctypes.c_void_p]
 lib.debug_state.argtypes = [ctypes.c_void_p]
 from viobench.tools.datasets.sources import episodes
-e = next(episodes(ep))
+from host_native import virtual_episode
+e = virtual_episode(ep)
 config, frames = e.adapt((320, 240))
 print({k: config[k] for k in config if k != "T_cam_imu"}, config["T_cam_imu"])
 blob = json.dumps(config).encode(); lib.init(blob, len(blob))
