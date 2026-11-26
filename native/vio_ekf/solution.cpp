@@ -403,6 +403,39 @@ struct Estimator {
         M3 v_th = M3::zero(), v_bg = M3::zero(), v_ba = M3::zero(), v_g = M3::zero();
         M3 p_th = M3::zero(), p_v = M3::zero(), p_bg = M3::zero(), p_ba = M3::zero(), p_g = M3::zero();
         double T = 0;
+        if (P_PHI_FRAME) {
+            // mean per sample; Phi once per frame from the interval sums (first order in T, exact at constant R f)
+            M3 SR = M3::zero();      // sum R dt
+            V3 Sa{0, 0, 0};          // sum R f dt
+            for (int i = 0; i < count; i++) {
+                const double* r = imu + 7 * i;
+                const double dt = r[0] - t_last;
+                t_last = r[0];
+                if (dt <= 0 || dt > 0.1) continue;
+                const V3 w{r[4] - bg.x, r[5] - bg.y, r[6] - bg.z};
+                const V3 f{r[1] - ba.x, r[2] - ba.y, r[3] - ba.z};
+                w_last = w;
+                const V3 Rf = R * f;
+                const V3 a = Rf + g;
+                SR = SR + R * dt; Sa = Sa + Rf * dt;
+                p = p + v * dt + a * (0.5 * dt * dt);
+                v = v + a * dt;
+                R = R * expso3(w * dt);
+                T += dt;
+            }
+            if (T > 0) {
+                th_bg = SR * (-1.0);
+                v_th = skew(Sa) * (-1.0);
+                v_ba = SR * (-1.0);
+                v_g = M3::eye() * T;
+                v_bg = v_th * th_bg * 0.5;
+                p_v = M3::eye() * T;
+                p_th = v_th * (0.5 * T);
+                p_ba = v_ba * (0.5 * T);
+                p_g = M3::eye() * (0.5 * T * T);
+                p_bg = v_bg * (T / 3.0);
+            }
+        } else
         for (int i = 0; i < count; i++) {
             const double* r = imu + 7 * i;
             const double dt = r[0] - t_last;
@@ -431,16 +464,15 @@ struct Estimator {
                             {2, 0, &v_th}, {2, 3, &v_bg}, {2, 4, &v_ba}, {2, 5, &v_g}};
         constexpr int NB = sizeof(blks) / sizeof(blks[0]);
         const int n = dim();
-        static double tmp[9][NMAX];  // new rows of the th, p, v blocks: (Phi P)[0:9, :]
+        static preal tmp[9][NMAX];  // new rows of the th, p, v blocks: (Phi P)[0:9, :]
         for (int i = 0; i < 9; i++) for (int j = 0; j < n; j++) tmp[i][j] = P[i][j];
         for (int q = 0; q < NB; q++) {
             const M3& M = *blks[q].M;
             const int r0 = 3 * blks[q].r, c0 = 3 * blks[q].c;
             for (int i = 0; i < 3; i++) {
-                const double m0 = M.m[i][0], m1 = M.m[i][1], m2 = M.m[i][2];
-                double* out = tmp[r0 + i];
-                const preal *a0 = P[c0], *a1 = P[c0 + 1], *a2 = P[c0 + 2];
-                for (int j = 0; j < n; j++) out[j] += m0 * a0[j] + m1 * a1[j] + m2 * a2[j];
+                const preal m0 = (preal)M.m[i][0], m1 = (preal)M.m[i][1], m2 = (preal)M.m[i][2];
+                preal* out = tmp[r0 + i];
+                axpyx(out, P[c0], m0, n); axpyx(out, P[c0 + 1], m1, n); axpyx(out, P[c0 + 2], m2, n);
             }
         }
         // rows 0..8 of Phi P are tmp; rows 9..17 are P's. Now (Phi P) Phi^T: columns 0..8 change the same way.

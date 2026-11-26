@@ -215,3 +215,6 @@
 #ifndef P_SLAM_INIT_MAX
 #define P_SLAM_INIT_MAX 100 // new SLAM points per update
 #endif
+#ifndef P_PHI_FRAME
+#define P_PHI_FRAME 0       // transition matrix once per frame from interval sums instead of per IMU sample
+#endif
