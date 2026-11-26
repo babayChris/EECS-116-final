@@ -248,3 +248,34 @@
 #ifndef P_CLIP_MIN
 #define P_CLIP_MIN 0.2      // rad/s: only readings above this can be saturated
 #endif
+
+#ifndef P_DET_REFINE
+#define P_DET_REFINE 2      // hill-climb steps of the sparse corner search
+#endif
+#ifndef P_DET_REFINE_STEP
+#define P_DET_REFINE_STEP 1
+#endif
+#ifndef P_DET_CAND
+#define P_DET_CAND 0        // sparse corner search: candidates per cell (0 = dense search)
+#endif
+#ifndef P_POINT
+#define P_POINT 0           // gray pixel = one green sample instead of the P_DS x P_DS mean
+#endif
+#ifndef P_VPRIOR_EVERY
+#define P_VPRIOR_EVERY 1    // velocity prior on every this-many-th light frame (sigma scaled: same information)
+#endif
+#ifndef P_VPRIOR_PHASE
+#define P_VPRIOR_PHASE 1    // frame index (mod P_CLONE_EVERY * P_VPRIOR_EVERY) that takes the velocity prior
+#endif
+#ifndef P_FAST
+#define P_FAST 0            // 1: structured propagation, half-triangle updates; 2: also drop second-order bias blocks of Phi
+#endif
+#ifndef P_FAST_M
+#define P_FAST_M 8          // P_FAST: row-axpy covariance update when the update has at most this many rows
+#endif
+#ifndef P_MEAN_FRAME
+#define P_MEAN_FRAME 0      // P_PHI_FRAME: mean propagated once per frame from interval sums (midpoint attitude)
+#endif
+#ifndef P_COV_DEFER
+#define P_COV_DEFER 0       // P_PHI_FRAME: covariance propagated only at clone frames, over the accumulated interval
+#endif

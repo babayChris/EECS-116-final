@@ -1,6 +1,6 @@
 # Agent handoff — EECS 116 Final
 
-Last updated: November 26, 2026 (America/Los_Angeles), stage 3 preparation on `victor/stage3`. Sections below are dated; earlier ones are
+Last updated: November 26, 2026 (America/Los_Angeles, evening), stage 3 submissions and the low-fuel EKF on `victor/stage3`. Sections below are dated; earlier ones are
 snapshots and some of their "not yet" statements are superseded by later sections.
 
 ## Goal and conversation context
@@ -253,7 +253,7 @@ stage 2 slides: `results/stage3/README.md`.
 - Fuel: WASM is a stack machine (about 7 instructions per multiply-add even with f64x2), so fuel follows operation
   counts: about 0.3 M per frame is propagation + tracking, the update adds 0.2-1 M with its rows x state size. 10k fuel
   is below the cost of any covariance filter here (a 36-state covariance update alone is tens of thousands).
-- Not done: server submission, warehouse/forest data, learned components, the fuel goal of 10k.
+- Not done (as of this section): server submission, warehouse/forest data, learned components, the fuel goal of 10k.
 
 Results (sandbox, mean unaligned ATE; full table and caveats in `results/stage3/README.md`):
 
@@ -267,6 +267,29 @@ Results (sandbox, mean unaligned ATE; full table and caveats in `results/stage3/
 | `ekf_slam8b` | 3.59 m | 1.03 m | 0.27 m | 0.92 m | 1.83 m | 1.69 m | 1.39 M |
 | `r4_clamp` | 6.68 m | 1.15 m | 1.00 m | 5.08 m | 2.15 m | 5.72 m | 2.50 M |
 
+
+## Update, November 26, 2026 (evening): stage 3 server results, low-fuel EKF
+
+Details: `results/stage3/README.md` (sections "Server results", "Low-fuel EKF", "Cheap filter attempt"); raw numbers
+`results/stage3/server.json`.
+
+| Server, private_stage3 (24 episodes) | Mean ATE | Peak fuel | Frontier |
+|---|---:|---:|---|
+| `ekf_main` | 3.08 m | 1.1 M | no |
+| `ekf_ultra` | 4.0 m | 460k | no |
+| `m_d` (= `scripts/build_stage3.sh ekf_sliced`, byte-identical) | 4.76 m | 230k | yes |
+
+- Frontier that day: Bayesically Lost 8.79 m / 81, `cpp_minimal` 7.55 m / 113 (zero output of the set is about 7.55 m),
+  goats of 116 1.5 m / 419k, Bayesed Bots 0.7 m / 1.7 M, Team Robot 0.6 m / 4.1 M. Area is in natural-log coordinates on
+  both axes (`viobench/tools/server/evaluations.py` `dominated_area`), so the valuable region is 113-419k fuel where
+  nothing beats 7.55 m; improving `ekf_main` toward goats' accuracy is worth little by comparison.
+- `ekf_sliced`: `ekf_ultra` with 2 clones plus new `vio_ekf` options `P_FAST`, `P_COV_DEFER`, `P_MEAN_FRAME`,
+  `P_DET_CAND`/`P_DET_REFINE`, `P_MAX_CAND` (all default off; `ekf_main` results reproduce exactly). Local peak 0.20 M
+  (server about 1.1x local). Fuel now: about 70k fixed plus 12-15k per tracked feature per frame.
+- `native/vio_lite`: a 12-state no-clone filter, parked (not robust; see the stage 3 README). Helper scripts:
+  `scripts/lite_sweep.sh` (host sweeps of any native source via `SRC=`), `scripts/fuel_frames.py` (per-frame fuel
+  summary), `scripts/zero_ate.py`, `scripts/build_lite_variant.sh`, `scripts/host_lite_debug.py`, `scripts/host_lite_truth.py`.
+- Submissions so far are made by the user; 1 per day was left after the first stage 3 uploads.
 
 ## Not completed or not known
 

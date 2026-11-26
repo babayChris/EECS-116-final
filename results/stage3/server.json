@@ -1,0 +1,18 @@
+{
+  "note": "Stage 3 server results (private_stage3, 24 episodes, mean unaligned ATE, max fuel per frame), as reported by the user on Nov 26, 2026. Frontier points of other teams/baselines as listed on the server that day.",
+  "submissions": [
+    {"label": "ekf_main", "build": "scripts/build_stage3.sh ekf_main", "ate_mean": 3.08, "sim3_ate_mean": 1.31, "ate_median": 2.88, "velocity_rmse": 0.405, "fuel_max": 1100000, "fuel_p95": 902400,
+     "per_episode_ate_server_order": [0.403, 0.924, 3.78, 1.19, 0.601, 1.72, 1.66, 2.87, 2.33, 1.58, 0.796, 1.14, 4.6, 4.98, 5.77, 6.12, 3.2, 4.78, 1.31, 7.96, 4.25, 3.12, 2.89, 5.94],
+     "frontier": false},
+    {"label": "ekf_ultra", "build": "scripts/build_stage3.sh ekf_ultra", "ate_mean": 4.0, "fuel_max": 460000, "frontier": false},
+    {"label": "m_d", "build": "scripts/build_stage3.sh ekf_sliced (byte-identical wasm, sha256 4dde2a9c00b74fb5ae0eafa908abc0e1a767d9c15bb733e40abe13ec9e2fb828)", "ate_mean": 4.76, "fuel_max": 230000, "frontier": true}
+  ],
+  "frontier_others": [
+    {"label": "gyro heading + speed prior low fuel cpp", "team": "Bayesically Lost", "ate_mean": 8.79, "fuel_max": 81},
+    {"label": "cpp_minimal", "team": "baseline", "ate_mean": 7.55, "fuel_max": 113},
+    {"label": "python_minimal", "team": "baseline", "ate_mean": 7.55, "fuel_max": 214000},
+    {"label": "Nov20S3Final", "team": "goats of 116", "ate_mean": 1.5, "fuel_max": 419000},
+    {"label": "fast_vins", "team": "Bayesed Bots", "ate_mean": 0.7, "fuel_max": 1700000},
+    {"label": "a6-640-intfull-f30", "team": "Team Robot", "ate_mean": 0.6, "fuel_max": 4100000}
+  ]
+}

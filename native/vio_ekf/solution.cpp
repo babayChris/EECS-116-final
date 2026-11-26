@@ -194,6 +194,7 @@ constexpr float INV_DS2 = 1.0f / (P_DS * P_DS);
 
 inline float green(const uint8_t* rgb, int x, int y) {  // gray-resolution pixel
     if (P_DS == 1) return rgb[(y * W0 + x) * 3 + 1];
+    if (P_POINT) return rgb[((y * P_DS + P_DS / 2) * W0 + x * P_DS + P_DS / 2) * 3 + 1];
     const uint8_t* p = rgb + ((y * P_DS) * W0 + x * P_DS) * 3 + 1;
     int s = 0;
     for (int dy = 0; dy < P_DS; dy++, p += W0 * 3)
@@ -204,6 +205,16 @@ inline float green(const uint8_t* rgb, int x, int y) {  // gray-resolution pixel
 // window of side WS centred on integer (cx, cy); false if it does not fit in the image
 inline bool extract_window(const uint8_t* rgb, int cx, int cy, float* win) {
     if (cx - WR < 0 || cy - WR < 0 || cx + WR >= GW || cy + WR >= GH) return false;
+    if (P_FAST && P_DS == 2 && !P_POINT) {   // 2 x 2 green block sums straight from two RGB rows
+        const int x0 = cx - WR, y0 = cy - WR;
+        for (int y = 0; y < WS; y++) {
+            const uint8_t* r0 = rgb + ((2 * (y0 + y)) * W0 + 2 * x0) * 3 + 1;
+            const uint8_t* r1 = r0 + W0 * 3;
+            float* out = win + y * WS;
+            for (int x = 0; x < WS; x++, r0 += 6, r1 += 6) out[x] = (float)(r0[0] + r0[3] + r1[0] + r1[3]) * 0.25f;
+        }
+        return true;
+    }
     for (int y = 0; y < WS; y++)
         for (int x = 0; x < WS; x++) win[y * WS + x] = green(rgb, cx - WR + x, cy - WR + y);
     return true;
@@ -309,6 +320,58 @@ bool best_corner(const uint8_t* rgb, int x0, int y0, int x1, int y1, int& bx, in
     return bx >= 0;
 }
 
+// sparse corner search: P_DET_CAND points on a jittered grid in the cell scored with a 5 x 5 Shi-Tomasi, then a
+// hill climb on the 8 neighbours of the best (P_DET_REFINE steps)
+inline float point_score5(const uint8_t* rgb, int x, int y) {
+    float b[25];
+    if (P_FAST && P_DS == 2 && !P_POINT) {
+        for (int dy = 0; dy < 5; dy++) {
+            const uint8_t* r0 = rgb + ((2 * (y - 2 + dy)) * W0 + 2 * (x - 2)) * 3 + 1;
+            const uint8_t* r1 = r0 + W0 * 3;
+            for (int dx = 0; dx < 5; dx++, r0 += 6, r1 += 6) b[dy * 5 + dx] = (float)(r0[0] + r0[3] + r1[0] + r1[3]) * 0.25f;
+        }
+    } else
+    for (int dy = 0; dy < 5; dy++) for (int dx = 0; dx < 5; dx++) b[dy * 5 + dx] = green(rgb, x - 2 + dx, y - 2 + dy);
+    float sxx = 0, sxy = 0, syy = 0;
+    for (int dy = 1; dy <= 3; dy++)
+        for (int dx = 1; dx <= 3; dx++) {
+            const float a = b[dy * 5 + dx + 1] - b[dy * 5 + dx - 1], c = b[dy * 5 + dx + 5] - b[dy * 5 + dx - 5];
+            sxx += a * a; sxy += a * c; syy += c * c;
+        }
+    const float tr = 0.5f * (sxx + syy), d = std::sqrt(0.25f * (sxx - syy) * (sxx - syy) + sxy * sxy);
+    return tr - d;
+}
+inline bool sparse_corner(const uint8_t* rgb, int x0, int y0, int x1, int y1, unsigned salt, int& bx, int& by) {
+    const int w = x1 - x0, h = y1 - y0;
+    if (w < 3 || h < 3) return false;
+    int nx = 1; while ((nx + 1) * (nx + 1) * h <= P_DET_CAND * w) nx++;   // grid nx x ny ~ P_DET_CAND, aspect of the cell
+    int ny = std::max(1, P_DET_CAND / nx);
+    const float sx = (float)w / nx, sy = (float)h / ny;
+    const float jx = ((salt * 2654435761u) >> 16 & 255) / 256.0f, jy = ((salt * 40503u + 7u) >> 4 & 255) / 256.0f;
+    float best = -1;
+    bx = -1;
+    for (int j = 0; j < ny; j++)
+        for (int i = 0; i < nx; i++) {
+            const int x = x0 + (int)((i + jx) * sx), y = y0 + (int)((j + jy) * sy);
+            const float s = point_score5(rgb, x, y);
+            if (s > best) { best = s; bx = x; by = y; }
+        }
+    for (int it = 0; it < P_DET_REFINE; it++) {
+        int nbx = bx, nby = by;
+        for (int dy = -1; dy <= 1; dy++)
+            for (int dx = -1; dx <= 1; dx++) {
+                if (!dx && !dy) continue;
+                const int x = bx + dx * P_DET_REFINE_STEP, y = by + dy * P_DET_REFINE_STEP;
+                if (x < x0 || x >= x1 || y < y0 || y >= y1) continue;
+                const float s = point_score5(rgb, x, y);
+                if (s > best) { best = s; nbx = x; nby = y; }
+            }
+        if (nbx == bx && nby == by) break;
+        bx = nbx; by = nby;
+    }
+    return best > P_MIN_SCORE * 4 * 9;
+}
+
 // ------------------------------------------------------------------ estimator
 struct Obs { int clone_id; double u, v; };  // normalized image coordinates
 
@@ -397,6 +460,19 @@ struct Estimator {
     }
 
     // ---------------------------------------------------------------- propagation
+    M3 acc_SR = M3::zero(); V3 acc_Sa{0, 0, 0}; double acc_T = 0, acc_qclip = 0;   // Phi interval sums not yet applied to P
+    static double clip_noise(const double* imu, int count) {   // gyro saturation: an axis repeating a large reading
+        double q = 0;
+        for (int ax = 0; ax < 3; ax++) {
+            int run = 0;
+            for (int i = 1; i < count; i++) {
+                const double a0 = imu[7 * (i - 1) + 4 + ax], a1 = imu[7 * i + 4 + ax];
+                if (a1 == a0 && std::fabs(a1) > P_CLIP_MIN) { if (++run >= 2) q += P_CLIP_SIGMA * P_CLIP_SIGMA * 0.005 * 0.005; }
+                else run = 0;
+            }
+        }
+        return q;
+    }
     void propagate(const double* imu, int count) {
         // Phi blocks (first order, composed per sample) for the rows that change
         M3 th_bg = M3::zero();
@@ -404,9 +480,31 @@ struct Estimator {
         M3 p_th = M3::zero(), p_v = M3::zero(), p_bg = M3::zero(), p_ba = M3::zero(), p_g = M3::zero();
         double T = 0;
         if (P_PHI_FRAME) {
-            // mean per sample; Phi once per frame from the interval sums (first order in T, exact at constant R f)
-            M3 SR = M3::zero();      // sum R dt
-            V3 Sa{0, 0, 0};          // sum R f dt
+            // mean per sample (or once per frame from interval sums, P_MEAN_FRAME); Phi from the interval sums, accumulated
+            // over frames until the covariance is propagated (P_COV_DEFER: only at clone frames)
+            if (P_MEAN_FRAME) {
+                V3 ws{0, 0, 0}, fs{0, 0, 0};
+                double Tf = 0;
+                for (int i = 0; i < count; i++) {
+                    const double* r = imu + 7 * i;
+                    const double dt = r[0] - t_last;
+                    t_last = r[0];
+                    if (dt <= 0 || dt > 0.1) continue;
+                    ws.x += r[4] * dt; ws.y += r[5] * dt; ws.z += r[6] * dt;
+                    fs.x += r[1] * dt; fs.y += r[2] * dt; fs.z += r[3] * dt;
+                    Tf += dt;
+                }
+                if (Tf > 0) {
+                    ws = ws - bg * Tf; fs = fs - ba * Tf;
+                    w_last = ws * (1.0 / Tf);
+                    const M3 Rm = R * expso3(ws * 0.5);
+                    const V3 Rf = Rm * fs;
+                    acc_SR = acc_SR + Rm * Tf; acc_Sa = acc_Sa + Rf; acc_T += Tf;
+                    p = p + v * Tf + (Rf + g * Tf) * (0.5 * Tf);
+                    v = v + Rf + g * Tf;
+                    R = R * expso3(ws);
+                }
+            } else
             for (int i = 0; i < count; i++) {
                 const double* r = imu + 7 * i;
                 const double dt = r[0] - t_last;
@@ -417,12 +515,20 @@ struct Estimator {
                 w_last = w;
                 const V3 Rf = R * f;
                 const V3 a = Rf + g;
-                SR = SR + R * dt; Sa = Sa + Rf * dt;
+                acc_SR = acc_SR + R * dt; acc_Sa = acc_Sa + Rf * dt; acc_T += dt;
                 p = p + v * dt + a * (0.5 * dt * dt);
                 v = v + a * dt;
                 R = R * expso3(w * dt);
-                T += dt;
             }
+            if (P_SKIP & 128) { orthonormalize(R); return; }
+            if (P_COV_DEFER && frame % P_CLONE_EVERY != 0) {   // covariance later, over the accumulated interval
+                if (P_CLIP_SIGMA > 0) acc_qclip += clip_noise(imu, count);
+                orthonormalize(R);
+                return;
+            }
+            T = acc_T;
+            const M3 SR = acc_SR; const V3 Sa = acc_Sa;
+            acc_SR = M3::zero(); acc_Sa = V3{0, 0, 0}; acc_T = 0;
             if (T > 0) {
                 th_bg = SR * (-1.0);
                 v_th = skew(Sa) * (-1.0);
@@ -458,6 +564,7 @@ struct Estimator {
             T += dt;
         }
         orthonormalize(R);
+        if (P_SKIP & 128) return;   // fuel attribution: mean only
         // P <- Phi P Phi^T with the sparse Phi = I + blocks (block order th 0, p 1, v 2, bg 3, ba 4, g 5)
         struct Blk { int r, c; const M3* M; };
         const Blk blks[] = {{0, 3, &th_bg}, {1, 0, &p_th}, {1, 2, &p_v}, {1, 3, &p_bg}, {1, 4, &p_ba}, {1, 5, &p_g},
@@ -466,13 +573,17 @@ struct Estimator {
         const int n = dim();
         static preal tmp[9][NMAX];  // new rows of the th, p, v blocks: (Phi P)[0:9, :]
         for (int i = 0; i < 9; i++) for (int j = 0; j < n; j++) tmp[i][j] = P[i][j];
+        // block kinds: 0 dense, 1 scalar * I (m[0][0]), 2 skew (zero diagonal), 3 dropped (P_FAST >= 2: second-order bias terms)
+        const int kind[] = {0, 2, 1, P_FAST >= 2 ? 3 : 0, 0, 1, 2, P_FAST >= 2 ? 3 : 0, 0, 1};
         for (int q = 0; q < NB; q++) {
             const M3& M = *blks[q].M;
             const int r0 = 3 * blks[q].r, c0 = 3 * blks[q].c;
+            const int kd = P_FAST ? kind[q] : 0;
+            if (kd == 3) continue;
             for (int i = 0; i < 3; i++) {
-                const preal m0 = (preal)M.m[i][0], m1 = (preal)M.m[i][1], m2 = (preal)M.m[i][2];
                 preal* out = tmp[r0 + i];
-                axpyx(out, P[c0], m0, n); axpyx(out, P[c0 + 1], m1, n); axpyx(out, P[c0 + 2], m2, n);
+                if (kd == 1) { axpyx(out, P[c0 + i], (preal)M.m[0][0], n); continue; }
+                for (int k = 0; k < 3; k++) if (kd != 2 || k != i) axpyx(out, P[c0 + k], (preal)M.m[i][k], n);
             }
         }
         // rows 0..8 of Phi P are tmp; rows 9..17 are P's. Now (Phi P) Phi^T: columns 0..8 change the same way.
@@ -482,6 +593,13 @@ struct Estimator {
         for (int q = 0; q < NB; q++) {
             const M3& M = *blks[q].M;
             const int r0 = 3 * blks[q].r, c0 = 3 * blks[q].c;
+            const int kd = P_FAST ? kind[q] : 0;
+            if (kd == 3) continue;
+            if (kd == 1) {
+                const double sc = M.m[0][0];
+                for (int i = 0; i < NI; i++) { tc[i][r0] += sc * P[i][c0]; tc[i][r0 + 1] += sc * P[i][c0 + 1]; tc[i][r0 + 2] += sc * P[i][c0 + 2]; }
+                continue;
+            }
             for (int i = 0; i < NI; i++) {
                 const double a0 = P[i][c0], a1 = P[i][c0 + 1], a2 = P[i][c0 + 2];
                 for (int j = 0; j < 3; j++) tc[i][r0 + j] += M.m[j][0] * a0 + M.m[j][1] * a1 + M.m[j][2] * a2;
@@ -492,17 +610,9 @@ struct Estimator {
         for (int i = 0; i < NI; i++) for (int j = 0; j < i; j++) { const double v2 = 0.5 * (P[i][j] + P[j][i]); P[i][j] = P[j][i] = v2; }
         for (int i = 0; i < 9; i++) for (int j = NI; j < n; j++) P[j][i] = P[i][j];
         // gyro saturation: an axis repeating the same large reading is clipped; its true rate is unknown
-        double qclip = 0;
-        if (P_CLIP_SIGMA > 0) {
-            for (int ax = 0; ax < 3; ax++) {
-                int run = 0;
-                for (int i = 1; i < count; i++) {
-                    const double a0 = imu[7 * (i - 1) + 4 + ax], a1 = imu[7 * i + 4 + ax];
-                    if (a1 == a0 && std::fabs(a1) > P_CLIP_MIN) { if (++run >= 2) qclip += P_CLIP_SIGMA * P_CLIP_SIGMA * 0.005 * 0.005; }
-                    else run = 0;
-                }
-            }
-        }
+        double qclip = acc_qclip;
+        acc_qclip = 0;
+        if (P_CLIP_SIGMA > 0) qclip += clip_noise(imu, count);
         // process noise
         const double qg = P_GYRO_NOISE * P_GYRO_NOISE * T + qclip, qa = P_ACC_NOISE * P_ACC_NOISE * T;
         for (int i = 0; i < 3; i++) {
@@ -530,6 +640,18 @@ struct Estimator {
     void remove_clone(int slot) {
         const int n = dim();
         const int s = C0() + 6 * slot;
+        if (P_FAST) {   // branch-free row/column shifts
+            for (int i = 0; i < n; i++) {
+                if (i >= s && i < s + 6) continue;
+                preal* dst = P[i < s ? i : i - 6];
+                const preal* src = P[i];
+                if (dst != src) for (int j = 0; j < s; j++) dst[j] = src[j];
+                for (int j = s; j < n - 6; j++) dst[j] = src[j + 6];
+            }
+            for (int k = slot; k < nclones - 1; k++) clones[k] = clones[k + 1];
+            nclones--;
+            return;
+        }
         // shift rows and columns after the removed block
         for (int i = 0; i < n; i++) {
             if (i >= s && i < s + 6) continue;
@@ -979,6 +1101,15 @@ struct Estimator {
             if (!(P_EKF_SKIP & 4)) for (int a2 = 0; a2 < m; a2++) w[a2] = (ph[a2] - dotx(Lf[a2], w, a2)) / Lf[a2][a2];
             dx[i] = dotx(w, zf, m);
         }
+        if (P_FAST && m <= P_FAST_M && !(P_EKF_SKIP & 8)) {
+            static preal Wt[MR][NMAX];
+            for (int a2 = 0; a2 < m; a2++) for (int i = 0; i < n; i++) Wt[a2][i] = Wm[i][a2];
+            for (int i = 0; i < n; i++) {
+                preal* Pi = P[i] + i;
+                for (int a2 = 0; a2 < m; a2++) axpyx(Pi, Wt[a2] + i, -Wm[i][a2], n - i);
+            }
+            for (int i = 0; i < n; i++) for (int j = 0; j < i; j++) P[i][j] = P[j][i];
+        } else
         if (!(P_EKF_SKIP & 8)) for (int i = 0; i < n; i++) {
             const preal* wi = Wm[i];
             for (int j = i; j < n; j++) {
@@ -1154,11 +1285,19 @@ struct Estimator {
             const double k1 = c0 * I[0][1] + c1 * I[1][1] + c2 * I[2][1];
             const double k2 = c0 * I[0][2] + c1 * I[1][2] + c2 * I[2][2];
             dx[i] = k0 * r[0] + k1 * r[1] + k2 * r[2];
+            if (P_FAST) {   // upper triangle (j >= i); mirrored below
+                preal* Pi = P[i] + i;
+                axpyx(Pi, Rv[0] + i, (preal)-k0, n - i);
+                axpyx(Pi, Rv[1] + i, (preal)-k1, n - i);
+                axpyx(Pi, Rv[2] + i, (preal)-k2, n - i);
+                continue;
+            }
             preal* Pi = P[i];
             axpyx(Pi, Rv[0], (preal)-k0, n);
             axpyx(Pi, Rv[1], (preal)-k1, n);
             axpyx(Pi, Rv[2], (preal)-k2, n);
         }
+        if (P_FAST) for (int i = 0; i < n; i++) for (int j = 0; j < i; j++) P[i][j] = P[j][i];
         apply_correction(dx);
     }
 
@@ -1229,7 +1368,8 @@ struct Estimator {
             const int y0 = std::max(border, gy * CH), y1 = std::min(GH - border, (gy + 1) * CH);
             searched++;
             int bx, by;
-            if (x1 - x0 < 3 || y1 - y0 < 3 || !best_corner(rgb, x0, y0, x1, y1, bx, by)) continue;
+            if (x1 - x0 < 3 || y1 - y0 < 3) continue;
+            if (P_DET_CAND > 0 ? !sparse_corner(rgb, x0, y0, x1, y1, (unsigned)(frame * 31 + c), bx, by) : !best_corner(rgb, x0, y0, x1, y1, bx, by)) continue;
             Feature& f = feats[nfeats];
             static float win[WS * WS];
             if (!extract_window(rgb, bx, by, win)) continue;
@@ -1465,9 +1605,10 @@ struct Estimator {
             for (int k = 0; k < nfeats; k++) nalive_now += feats[k].alive && feats[k].slam < 0;
             starved = nalive_now < P_STARVE_FEATS ? starved + 1 : 0;
             const double vp_base = starved >= P_STARVE_FRAMES ? P_VPRIOR_STARVED : P_VPRIOR_SIGMA;
-            const double vp_sigma = P_BALANCE && P_SPLIT ? vp_base / std::sqrt((double)P_CLONE_EVERY) : vp_base;
+            const double vp_sigma = (P_BALANCE && P_SPLIT ? vp_base / std::sqrt((double)P_CLONE_EVERY) : vp_base) / std::sqrt((double)P_VPRIOR_EVERY);
+            const bool vp_turn = P_VPRIOR_EVERY == 1 || frame % (P_CLONE_EVERY * P_VPRIOR_EVERY) == P_VPRIOR_PHASE;
             twice(4, [&] { velocity_prior(vp_sigma); });
-            if (P_VPRIOR_SIGMA > 0 && !(P_SKIP & 4) && (light || !P_BALANCE)) velocity_prior(vp_sigma);
+            if (P_VPRIOR_SIGMA > 0 && !(P_SKIP & 4) && (light || !P_BALANCE) && vp_turn) velocity_prior(vp_sigma);
             if (P_VZ_SIGMA > 0 && (light || !P_BALANCE)) vertical_prior(P_BALANCE && P_SPLIT ? P_VZ_SIGMA / std::sqrt((double)P_CLONE_EVERY) : P_VZ_SIGMA);
             twice(1, [&] { track(rgb, R_prev, p_prev); });
 #ifndef __wasm__
@@ -1768,7 +1909,8 @@ VIOBENCH_EXPORT(init) int32_t init(const char* json, uint32_t length) {
     Estimator& e = *new Estimator();  // one instance per episode: init runs once
     // intrinsics at the gray resolution (pixel-centre convention)
     e.fx = fx / P_DS; e.fy = fy / P_DS;
-    e.cx = (cx + 0.5) / P_DS - 0.5; e.cy = (cy + 0.5) / P_DS - 0.5;
+    if (P_POINT) { e.cx = (cx - P_DS / 2) / (double)P_DS; e.cy = (cy - P_DS / 2) / (double)P_DS; }
+    else { e.cx = (cx + 0.5) / P_DS - 0.5; e.cy = (cy + 0.5) / P_DS - 0.5; }
     for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) e.R_ci.m[i][j] = T[4 * i + j];
     e.t_ci = {T[3], T[7], T[11]};
     e.R_ic = e.R_ci.t();

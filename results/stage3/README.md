@@ -1,6 +1,6 @@
 # Stage 3 preparation (November 26, 2026)
 
-Work on branch `victor/stage3`. Nothing here has been submitted; all numbers are local (WASM sandbox unless noted).
+Work on branch `victor/stage3`. Numbers are local (WASM sandbox unless noted) except the server section below.
 
 ## What changed for stage 3
 
@@ -53,6 +53,67 @@ simulator's camera hook). The public scene catalogs contain only ProcTHOR and HS
 forest episodes; as a stand-in for larger scenes, `scripts/host_native.py` can scale any episode in space (`path@start:dur:k`:
 positions and true accelerations x k, images unchanged), which is exactly the same flight in a k-times larger scene.
 
+## Server results (Nov 26, 2026; `server.json`)
+
+| Submission | Mean ATE | Peak fuel | On the frontier |
+|---|---:|---:|---|
+| `ekf_main` | 3.08 m | 1.1 M | no (goats: 1.5 m at 419k) |
+| `ekf_ultra` | 4.0 m | 460k | no |
+| `m_d` = `ekf_sliced` | 4.76 m | 230k | **yes** |
+
+Other frontier points that day: Bayesically Lost 8.79 m at 81 fuel, `cpp_minimal` 7.55 m at 113 (the zero-output error of
+the set is about 7.55 m), goats of 116 1.5 m at 419k, Bayesed Bots 0.7 m at 1.7 M, Team Robot 0.6 m at 4.1 M.
+
+The server measures area in natural-log coordinates on both axes, so the open region is 113-419k fuel, where nothing
+beats 7.55 m: `m_d` claims about ln(419/230) x ln(7.55/4.76) = 0.28. For comparison, `ekf_main` would need < 1.5 m to
+claim anything, and about 1.2 m would claim only about 0.1. Hypothetical points: 100k at 4 m about 0.9, 20k at 4 m about 1.9.
+`ekf_main`'s per-episode errors suggest the order rooms (12, mean 1.58 m), then 12 large-scene episodes (mean 4.6 m).
+
+## Low-fuel EKF (`ekf_sliced`, Nov 26 afternoon)
+
+`ekf_ultra` with 2 clones (`P_CLONES=2 P_MIN_OBS=2`) and these options (all off by default; `ekf_main` is unchanged):
+
+- `P_DET_CAND`, `P_DET_REFINE`: sparse corner search (jittered candidate grid scored with a 5 x 5 Shi-Tomasi, hill
+  climb). The dense search cost about 50-160k per frame.
+- `P_FAST=2`: structured covariance propagation (scalar and skew blocks of the transition matrix, second-order bias
+  blocks dropped), half-triangle velocity-prior and EKF covariance updates, branch-free clone removal (35k -> 9k),
+  direct 2 x 2 green reads for windows and corner scores.
+- `P_COV_DEFER`: covariance propagated only at clone frames over the accumulated interval (row building only reads the
+  clone block, which propagation does not change; the velocity prior uses a one-frame-old covariance).
+- `P_MEAN_FRAME`: mean propagated once per frame from interval sums. `P_MAX_CAND`: candidates per update.
+- Also available: `P_VPRIOR_EVERY` (velocity prior on every k-th light frame), `P_POINT` (single green sample per
+  pixel: cheaper but much less accurate from aliasing).
+
+| Local | zero | `ekf_c2` (= submitted-day `e_c2`) | `ekf_sliced` |
+|---|---:|---:|---:|
+| s3 (16 x 45 s, sandbox) | 2.24 m | 1.88 m | 2.06 m |
+| s3test (4 x 8 s, sandbox) | 2.23 m | 1.19 m | 0.93 m |
+| agile proxy (4, sandbox) | 1.89 m | 0.59 m | 0.30 m |
+| held-out scenes 88/150 (host) | 2.09 m | 1.84 m | 2.29 m |
+| tune scenes x3 scale (host) | 7.16 m | 6.20 m | 5.64 m |
+| held-out scenes x3 scale (host) | ~6.3 m | 5.53 m | 6.10 m |
+| peak fuel (sandbox) | | 0.29 M | 0.20 M |
+
+Server/local fuel ratio: about 1.1 (`ekf_ultra` 0.42 -> 0.46 M, `ekf_sliced` 0.20 -> 0.23 M).
+
+Where the fuel goes now (s3 flights, by end-to-end removal): about 70k with no features (covariance about 30k on clone
+frames, velocity prior about 25k on light frames, mean, clone handling, detection), plus about 12-15k per tracked feature
+per frame (window, LK iterations at about 1k each, its share of the update). 8 features therefore cost about 100k; 6
+features already lose accuracy (s3 2.48 m). Reaching about 100k needs fewer, cheaper features or a different estimator.
+Note: the `P_DOUBLE` attribution (run a section twice) over-counts by about 2x in these builds; trust removal tests.
+Small changes (even the first-frame corner search) move individual flights by up to about 1 m: compare on all sets.
+
+## Cheap filter attempt (`native/vio_lite`, parked)
+
+A 12-state filter (velocity, gravity, gyro bias, attitude error; no clones) whose visual input is the coplanarity of
+feature bearings over a baseline plus a signed flow-magnitude row with an inverse-depth prior. Fixed along the way: a
+sign ambiguity of the coplanarity (the signed flow row adds cheirality), attitude corrections not applied to the stored
+history (`P_HISTCORR`), dense corner search cost. Measurement model verified with forced ground truth
+(`scripts/host_lite_truth.py`, NIS < 1). Not robust: a fixed depth prior per feature is wrong for most features
+(rooms span 0.5-5 m) and pulls the gyro bias (11-30 deg rotation error), so it is worse than zero output on the
+blank-wall held-out scenes (3.3 m vs 2.1 m) at 75k median / 155k peak with 8 features. It would need per-feature depth
+(what makes the EKF robust) and time-slicing to reach its intended 10-30k.
+
 ## Local results (WASM sandbox, default limits, mean unaligned ATE)
 
 | Build | new stage-3-like (16 x 45 s) | stage-3-like test (4 x 8 s) | agile proxy, in-motion (4 x 7.5 s) | public, cropped in motion (10 x 30 s; deleted after the run, recreate in memory with `<hash>@15:30` specs) | agile proxy x2.5 scale (4) | public (10 x 60 s, hover start) | Peak fuel |
@@ -90,8 +151,9 @@ other teams measured for stage 2, so they understate the agility; the warehouse 
 
 ## Next steps
 
-- Long-baseline rotation constraint (a keyframe clone kept ~1.5 s, or the stage 2 vision bias correction) against
-  heading drift; then re-check the priors.
-- Faster training/test flights in larger HSSD scenes as the warehouse stand-in (HSSD renders slower, ~6.5 GB RAM).
-- Submit `ekf_main` (and `ekf_ultra` as the low-fuel point) once the user decides; nothing has been uploaded.
+- The large area is below 419k fuel: cut `ekf_sliced` further (per-feature tracking cost, fewer but better features,
+  velocity prior cost) or finish a much cheaper estimator; every halving of fuel at 4.76 m adds about 0.32.
+- Large scenes are half the server set and every build is near zero output on the scaled stand-in; goats' 1.5 m
+  suggests they handle them. Suspects: the 3 m inverse-depth prior and the zero-mean velocity prior.
+- Long-baseline rotation constraint against heading drift; faster flights in larger HSSD scenes as a warehouse stand-in.
 

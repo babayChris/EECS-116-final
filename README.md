@@ -17,7 +17,8 @@ A new estimator, `native/vio_ekf`: a compact MSCKF-style visual-inertial EKF in 
 so flights that start in motion need no calibration hover, and patch tracking read straight from the green channel.
 `scripts/build_stage3.sh` builds the candidates; `scripts/make_stage3_episodes.sh` simulates stage-3-like flights (fast
 autopilot, in-motion start, FoV 75–135°, motion blur 0–50 ms). Design, sources (including ideas from the class's stage 2
-presentations) and local results: `results/stage3/README.md`. Nothing from it has been submitted.
+presentations), local and server results: `results/stage3/README.md`. On the stage 3 server `ekf_main` scored 3.08 m at
+1.1 M fuel and the low-fuel `ekf_sliced` 4.76 m at 230k, which is on the frontier.
 
 ## What the estimator does
 
