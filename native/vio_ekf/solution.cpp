@@ -356,7 +356,7 @@ struct Estimator {
     double depth_est = P_PRED_DEPTH;
     double log_depth = std::log(P_DEPTH_PRIOR);  // running mean log-depth of well-triangulated points (adaptive prior)
     // diagnostics
-    int st_slam_init = 0, st_slam_upd = 0;
+    int st_slam_init = 0, st_slam_upd = 0, st_reopen = 0, reject_run = 0;
     int st_tracked = 0, st_lost = 0, st_cand = 0, st_tri_fail = 0, st_chi_fail = 0, st_used = 0, st_rows = 0;
 
     // SLAM points: world xyz in the state between the IMU block and the clones
@@ -491,8 +491,20 @@ struct Estimator {
         // symmetric fill: IMU-IMU block lower part and the IMU-clone cross terms
         for (int i = 0; i < NI; i++) for (int j = 0; j < i; j++) { const double v2 = 0.5 * (P[i][j] + P[j][i]); P[i][j] = P[j][i] = v2; }
         for (int i = 0; i < 9; i++) for (int j = NI; j < n; j++) P[j][i] = P[i][j];
+        // gyro saturation: an axis repeating the same large reading is clipped; its true rate is unknown
+        double qclip = 0;
+        if (P_CLIP_SIGMA > 0) {
+            for (int ax = 0; ax < 3; ax++) {
+                int run = 0;
+                for (int i = 1; i < count; i++) {
+                    const double a0 = imu[7 * (i - 1) + 4 + ax], a1 = imu[7 * i + 4 + ax];
+                    if (a1 == a0 && std::fabs(a1) > P_CLIP_MIN) { if (++run >= 2) qclip += P_CLIP_SIGMA * P_CLIP_SIGMA * 0.005 * 0.005; }
+                    else run = 0;
+                }
+            }
+        }
         // process noise
-        const double qg = P_GYRO_NOISE * P_GYRO_NOISE * T, qa = P_ACC_NOISE * P_ACC_NOISE * T;
+        const double qg = P_GYRO_NOISE * P_GYRO_NOISE * T + qclip, qa = P_ACC_NOISE * P_ACC_NOISE * T;
         for (int i = 0; i < 3; i++) {
             P[i][i] += qg;
             P[6 + i][6 + i] += qa;
@@ -836,7 +848,7 @@ struct Estimator {
                     for (int c = 0; c < nc; c++) s2 += Pfx[k][gidx[c]] * J[l][c];
                     double nz = 0;
                     for (int q = 0; q < 3; q++) nz += Ri[k][q] * Ri[l][q];
-                    Pff[k][l] = s2 + sig * sig * nz;
+                    Pff[k][l] = P_SLAM_INFLATE * (s2 + sig * sig * nz);
                 }
             const int pos = NI + 3 * nslam;
             insert_block(pos, 3);
@@ -1157,6 +1169,7 @@ struct Estimator {
         int rows = 0, used = 0;
         double depth_sum = 0; int depth_n = 0;
         int tried = 0, slam_new = 0;
+        const int chi_before = st_chi_fail;
         for (int q = 0; q < count && used < P_MAX_UPDATE_FEAT && tried < P_MAX_CAND; q++) {
             Feature& f = feats[idx[q]];
             if (f.nobs < P_MIN_OBS) continue;
@@ -1173,6 +1186,16 @@ struct Estimator {
 #endif
             (void)t_;
             if (got > 0) { rows += got; used++; st_used++; st_rows += got; (void)depth_sum; (void)depth_n; }
+        }
+        // gate-failure recovery: when most candidates fail the chi-square test over several updates, the state has
+        // probably jumped (e.g. a clipped gyro); re-open attitude and velocity so vision can pull them back
+        if (P_REOPEN && tried >= 3) {
+            const int rej = st_chi_fail - chi_before;
+            reject_run = rej * 10 >= tried * 7 ? reject_run + 1 : 0;
+            if (reject_run >= 3) {
+                for (int a = 0; a < 3; a++) { P[a][a] += (preal)(P_REOPEN_ROT * P_REOPEN_ROT); P[6 + a][6 + a] += (preal)(P_REOPEN_VEL * P_REOPEN_VEL); }
+                reject_run = 0; st_reopen++;
+            }
         }
         if (rows == 0) return;
         const int nc = 6 * nclones;

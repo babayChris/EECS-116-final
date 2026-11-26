@@ -27,8 +27,12 @@ def virtual_episode(spec):
     """path[@start:duration[:scale]]: an episode cropped to start in motion and optionally scaled in space
     (positions and true accelerations x scale, images unchanged: the same flight in a larger scene, flown faster)."""
     from viobench.tools.datasets.sources import episodes
+    clip = float(os.environ.get("GYRO_CLIP", "0"))
     if "@" not in spec:
-        return next(episodes(spec))
+        e = next(episodes(spec))
+        if clip > 0:
+            e.imu[:, 4:7] = np.clip(e.imu[:, 4:7], -clip, clip)
+        return e
     sys.path.insert(0, str(ROOT / "scripts"))
     from make_stage3_episodes import crop
     from viobench.tools.datasets.episode import Episode, FrameSequence
@@ -57,6 +61,8 @@ def virtual_episode(spec):
         imu[:, 1:4] += np.einsum("nji,nj->ni", R[idx], (k - 1) * ai)
         gt[:, 1:4] = pos[0] + k * (pos - pos[0])
         T[:3, 3] *= k
+    if clip > 0:
+        imu[:, 4:7] = np.clip(imu[:, 4:7], -clip, clip)
     cfg = {**e.config, "episode": {**e.config["episode"], "num_frames": n}}
     return Episode(name=e.name, config=cfg, frame_times=e.frame_times[:n], frames=seq, imu=imu, ground_truth=gt, T_body_camera=T, meta=e.meta)
 

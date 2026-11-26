@@ -230,3 +230,21 @@
 #ifndef P_VPRIOR_STARVED
 #define P_VPRIOR_STARVED 1.0  // m/s per frame: velocity prior while starved
 #endif
+#ifndef P_SLAM_INFLATE
+#define P_SLAM_INFLATE 1.0  // a new SLAM point's own covariance block is multiplied by this (conservative)
+#endif
+#ifndef P_REOPEN
+#define P_REOPEN 1          // re-open attitude/velocity covariance after repeated chi-square rejections
+#endif
+#ifndef P_REOPEN_ROT
+#define P_REOPEN_ROT 0.05   // rad
+#endif
+#ifndef P_REOPEN_VEL
+#define P_REOPEN_VEL 0.3    // m/s
+#endif
+#ifndef P_CLIP_SIGMA
+#define P_CLIP_SIGMA 2.0    // rad/s: rate uncertainty of a gyro sample that repeats a large value (saturation)
+#endif
+#ifndef P_CLIP_MIN
+#define P_CLIP_MIN 0.2      // rad/s: only readings above this can be saturated
+#endif
