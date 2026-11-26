@@ -28,7 +28,7 @@
 #define P_HALF 3            // LK patch half size: (2 P_HALF + 1)^2 pixels
 #endif
 #ifndef P_LK_ITERS
-#define P_LK_ITERS 8
+#define P_LK_ITERS 5
 #endif
 #ifndef P_LK_MAX_ERR
 #define P_LK_MAX_ERR 18.0   // mean absolute photometric error for a track to survive
@@ -42,7 +42,7 @@
 
 // ---- filter
 #ifndef P_CLONES
-#define P_CLONES 5          // camera poses kept in the window
+#define P_CLONES 4          // camera poses kept in the window
 #endif
 #ifndef P_CLONE_EVERY
 #define P_CLONE_EVERY 2     // frames between clones
@@ -51,7 +51,7 @@
 #define P_MIN_OBS 3         // observations a feature needs for an update
 #endif
 #ifndef P_MAX_UPDATE_FEAT
-#define P_MAX_UPDATE_FEAT 20
+#define P_MAX_UPDATE_FEAT 6
 #endif
 #ifndef P_SIGMA_PX
 #define P_SIGMA_PX 1.0      // pixel noise at 320 x 240
@@ -106,4 +106,37 @@
 #endif
 #ifndef P_RHO_SIGMA_MIN
 #define P_RHO_SIGMA_MIN 0.02
+#endif
+#ifndef P_DETECT_CELLS
+#define P_DETECT_CELLS 2    // empty grid cells searched for a new corner per frame
+#endif
+#ifndef P_SPLIT
+#define P_SPLIT 1           // MSCKF rows at clone frames, the EKF update at the next frame (halves the peak)
+#endif
+#ifndef P_PRIOR_SWITCH
+#define P_PRIOR_SWITCH 0.3  // no depth prior for a point whose triangulated inverse-depth std is below this fraction (0 = always prior)
+#endif
+#ifndef P_LK_REL_ERR
+#define P_LK_REL_ERR 0.3    // a track is lost if its mean absolute error exceeds this times the patch contrast (+1)
+#endif
+#ifndef P_VPRIOR_SIGMA
+#define P_VPRIOR_SIGMA 5    // m/s per frame: weak zero-mean velocity pseudo-measurement every frame (0 = off)
+#endif
+#ifndef P_SKIP
+#define P_SKIP 0            // fuel attribution only: 1 = no tracking, 2 = no detection, 4 = no velocity prior, 8 = no propagation
+#endif
+#ifndef P_MARGIN
+#define P_MARGIN 4          // search margin (gray pixels) of a tracking window around the predicted position
+#endif
+#ifndef P_DOUBLE
+#define P_DOUBLE 0          // fuel attribution only: run sections twice on a copy (1 track, 2 detect, 4 vprior, 8 propagate, 16 ekf, 32 rows, 64 copy only)
+#endif
+#ifndef P_ADAPT_DEPTH
+#define P_ADAPT_DEPTH 0     // depth prior from the running mean log-depth of well-triangulated points
+#endif
+#ifndef P_RHO_REL
+#define P_RHO_REL 0.5       // adaptive prior: inverse-depth std relative to the prior inverse depth
+#endif
+#ifndef P_DEPTH_RATE
+#define P_DEPTH_RATE 0.05   // adaptive prior: update rate of the running log-depth
 #endif

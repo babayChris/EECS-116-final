@@ -19,11 +19,55 @@
 #include <algorithm>
 
 #include "params.h"
+#if defined(__wasm_simd128__) && !defined(P_SCALAR)
+#include <wasm_simd128.h>
+#endif
+
+// contiguous double kernels (f64x2 SIMD in the wasm build)
+inline double dotd(const double* a, const double* b, int n) {
+#if defined(__wasm_simd128__) && !defined(P_SCALAR)
+    v128_t s0 = wasm_f64x2_splat(0), s1 = wasm_f64x2_splat(0);
+    int i = 0;
+    for (; i + 4 <= n; i += 4) {
+        s0 = wasm_f64x2_add(s0, wasm_f64x2_mul(wasm_v128_load(a + i), wasm_v128_load(b + i)));
+        s1 = wasm_f64x2_add(s1, wasm_f64x2_mul(wasm_v128_load(a + i + 2), wasm_v128_load(b + i + 2)));
+    }
+    if (i + 2 <= n) { s0 = wasm_f64x2_add(s0, wasm_f64x2_mul(wasm_v128_load(a + i), wasm_v128_load(b + i))); i += 2; }
+    s0 = wasm_f64x2_add(s0, s1);
+    double r = wasm_f64x2_extract_lane(s0, 0) + wasm_f64x2_extract_lane(s0, 1);
+    if (i < n) r += a[i] * b[i];
+    return r;
+#else
+    double r = 0;
+    for (int i = 0; i < n; i++) r += a[i] * b[i];
+    return r;
+#endif
+}
+inline void axpyd(double* y, const double* x, double a, int n) {  // y += a x
+#if defined(__wasm_simd128__) && !defined(P_SCALAR)
+    const v128_t va = wasm_f64x2_splat(a);
+    int i = 0;
+    for (; i + 2 <= n; i += 2) wasm_v128_store(y + i, wasm_f64x2_add(wasm_v128_load(y + i), wasm_f64x2_mul(va, wasm_v128_load(x + i))));
+    if (i < n) y[i] += a * x[i];
+#else
+    for (int i = 0; i < n; i++) y[i] += a * x[i];
+#endif
+}
+
+#if !defined(__wasm__) && defined(P_PROF)
+#include <x86intrin.h>
+static unsigned long long prof_acc[8], prof_t0;
+#define PROF_BEGIN() (prof_t0 = __rdtsc())
+#define PROF_END(i) (prof_acc[i] += __rdtsc() - prof_t0)
+#else
+#define PROF_BEGIN() ((void)0)
+#define PROF_END(i) ((void)0)
+#endif
 
 namespace {
 
 constexpr int NI = 18;                        // IMU part of the error state
-constexpr int NMAX = NI + 6 * P_CLONES;       // full error state
+constexpr int NMAX = NI + 6 * (P_CLONES + 1); // full error state (one extra clone while a split update is pending)
 constexpr int W0 = 320, H0 = 240;
 constexpr int GW = W0 / P_DS, GH = H0 / P_DS; // gray image size
 constexpr double GRAVITY = 9.81;
@@ -66,7 +110,7 @@ M3 expso3(const V3& w) {
     const double th2 = dot(w, w);
     const M3 K = skew(w);
     double a, b;
-    if (th2 < 1e-12) { a = 1 - th2 / 6; b = 0.5 - th2 / 24; }
+    if (th2 < 4e-3) { a = 1 - th2 / 6 * (1 - th2 / 20); b = 0.5 - th2 / 24 * (1 - th2 / 30); }  // Taylor: < 1e-10 error below 0.063 rad
     else { const double th = std::sqrt(th2); a = std::sin(th) / th; b = (1 - std::cos(th)) / th2; }
     return M3::eye() + K * a + (K * K) * b;
 }
@@ -100,80 +144,130 @@ void quaternion(const M3& R, double q[4]) {  // [qx, qy, qz, qw]
     for (int i = 0; i < 4; i++) q[i] /= n;
 }
 
-// ------------------------------------------------------------------ image front end
-struct Image {
-    uint8_t px[GH][GW];
+// ------------------------------------------------------------------ image front end (sparse)
+// No full gray image: pixels are read from the RGB frame's green channel, P_DS x P_DS block sums at the gray
+// resolution, only in small windows around features and in the grid cells searched for new corners.
+constexpr int PH = P_HALF, PN = (2 * PH + 1) * (2 * PH + 1);
+constexpr int MARGIN = P_MARGIN;                   // search margin (gray pixels) of a tracking window
+constexpr int WR = PH + 1 + MARGIN;                // window radius
+constexpr int WS = 2 * WR + 1;                     // window side
+constexpr float INV_DS2 = 1.0f / (P_DS * P_DS);
+
+inline float green(const uint8_t* rgb, int x, int y) {  // gray-resolution pixel
+    if (P_DS == 1) return rgb[(y * W0 + x) * 3 + 1];
+    const uint8_t* p = rgb + ((y * P_DS) * W0 + x * P_DS) * 3 + 1;
+    int s = 0;
+    for (int dy = 0; dy < P_DS; dy++, p += W0 * 3)
+        for (int dx = 0; dx < P_DS; dx++) s += p[3 * dx];
+    return s * INV_DS2;
+}
+
+// window of side WS centred on integer (cx, cy); false if it does not fit in the image
+inline bool extract_window(const uint8_t* rgb, int cx, int cy, float* win) {
+    if (cx - WR < 0 || cy - WR < 0 || cx + WR >= GW || cy + WR >= GH) return false;
+    for (int y = 0; y < WS; y++)
+        for (int x = 0; x < WS; x++) win[y * WS + x] = green(rgb, cx - WR + x, cy - WR + y);
+    return true;
+}
+
+struct Template {           // patch on the integer grid around (ix, iy) of the previous frame
+    int ix, iy;
+    float T[PN], gx[PN], gy[PN];
+    float i00, i01, i11;    // inverse of the gradient structure matrix
+    float contrast;         // mean absolute deviation of the patch
+    bool ok;
 };
 
-void make_gray(const uint8_t* rgb, Image& out) {
-    for (int y = 0; y < GH; y++) {
-        for (int x = 0; x < GW; x++) {
-            int s = 0;
-            for (int dy = 0; dy < P_DS; dy++) {
-                const uint8_t* row = rgb + ((y * P_DS + dy) * W0 + x * P_DS) * 3 + 1;
-                for (int dx = 0; dx < P_DS; dx++) s += row[3 * dx];
-            }
-            out.px[y][x] = (uint8_t)(s / (P_DS * P_DS));
-        }
-    }
-}
-
-inline float bilinear(const Image& im, float x, float y) {
-    const int ix = (int)x, iy = (int)y;
-    const float fx = x - ix, fy = y - iy;
-    const uint8_t* r0 = &im.px[iy][ix];
-    const uint8_t* r1 = &im.px[iy + 1][ix];
-    return (1 - fy) * ((1 - fx) * r0[0] + fx * r0[1]) + fy * ((1 - fx) * r1[0] + fx * r1[1]);
-}
-
-// translation-only inverse-compositional LK of the patch around (x0, y0) in `a` into `b`, starting at (x, y)
-bool track_lk(const Image& a, const Image& b, float x0, float y0, float& x, float& y) {
-    constexpr int H = P_HALF, N = (2 * H + 1) * (2 * H + 1);
-    if (x0 < H + 1 || y0 < H + 1 || x0 > GW - H - 2 || y0 > GH - H - 2) return false;
-    float T[N], gx[N], gy[N];
+// template from a window centred at (wcx, wcy) for the grid point (ix, iy)
+inline void make_template(const float* win, int wcx, int wcy, int ix, int iy, Template& t) {
+    t.ix = ix; t.iy = iy; t.ok = false;
+    const int ox = ix - wcx + WR, oy = iy - wcy + WR;  // window coords of the centre
+    if (ox - PH - 1 < 0 || oy - PH - 1 < 0 || ox + PH + 1 >= WS || oy + PH + 1 >= WS) return;
     float gxx = 0, gxy = 0, gyy = 0;
     int k = 0;
-    for (int dy = -H; dy <= H; dy++)
-        for (int dx = -H; dx <= H; dx++, k++) {
-            const float px = x0 + dx, py = y0 + dy;
-            T[k] = bilinear(a, px, py);
-            gx[k] = 0.5f * (bilinear(a, px + 1, py) - bilinear(a, px - 1, py));
-            gy[k] = 0.5f * (bilinear(a, px, py + 1) - bilinear(a, px, py - 1));
-            gxx += gx[k] * gx[k]; gxy += gx[k] * gy[k]; gyy += gy[k] * gy[k];
+    for (int dy = -PH; dy <= PH; dy++) {
+        const float* row = win + (oy + dy) * WS + ox;
+        for (int dx = -PH; dx <= PH; dx++, k++) {
+            t.T[k] = row[dx];
+            const float a = 0.5f * (row[dx + 1] - row[dx - 1]);
+            const float b = 0.5f * (row[dx + WS] - row[dx - WS]);
+            t.gx[k] = a; t.gy[k] = b;
+            gxx += a * a; gxy += a * b; gyy += b * b;
         }
-    const float det = gxx * gyy - gxy * gxy;
-    if (det < 1e-3f * N * N) return false;
-    const float i00 = gyy / det, i01 = -gxy / det, i11 = gxx / det;
-    float err = 0;
-    for (int it = 0; it < P_LK_ITERS; it++) {
-        if (x < H + 1 || y < H + 1 || x > GW - H - 2 || y > GH - H - 2) return false;
-        float bx = 0, by = 0;
-        err = 0;
-        k = 0;
-        for (int dy = -H; dy <= H; dy++)
-            for (int dx = -H; dx <= H; dx++, k++) {
-                const float e = bilinear(b, x + dx, y + dy) - T[k];
-                bx += gx[k] * e; by += gy[k] * e;
-                err += std::fabs(e);
-            }
-        const float ux = i00 * bx + i01 * by, uy = i01 * bx + i11 * by;
-        x -= ux; y -= uy;
-        if (ux * ux + uy * uy < 0.0009f) break;
     }
-    if (x < H + 1 || y < H + 1 || x > GW - H - 2 || y > GH - H - 2) return false;
-    return err / N < P_LK_MAX_ERR;
+    const float det = gxx * gyy - gxy * gxy;
+    if (det < 1e-3f * PN * PN) return;
+    float mean = 0;
+    for (int q = 0; q < PN; q++) mean += t.T[q];
+    mean /= PN;
+    float dev = 0;
+    for (int q = 0; q < PN; q++) dev += std::fabs(t.T[q] - mean);
+    t.contrast = dev / PN;
+    t.i00 = gyy / det; t.i01 = -gxy / det; t.i11 = gxx / det;
+    t.ok = true;
 }
 
-float corner_score(const Image& im, int x, int y) {  // Shi-Tomasi min eigenvalue over a 5 x 5 window, per pixel
-    float sxx = 0, sxy = 0, syy = 0;
-    for (int dy = -2; dy <= 2; dy++)
-        for (int dx = -2; dx <= 2; dx++) {
-            const float gx = 0.5f * ((int)im.px[y + dy][x + dx + 1] - (int)im.px[y + dy][x + dx - 1]);
-            const float gy = 0.5f * ((int)im.px[y + dy + 1][x + dx] - (int)im.px[y + dy - 1][x + dx]);
-            sxx += gx * gx; sxy += gx * gy; syy += gy * gy;
+// track the template into the frame: (dx, dy) is the displacement of the grid patch, starting at the prediction.
+// win/wcx/wcy receive the window used (for the next template). Returns false if lost.
+inline bool track_template(const uint8_t* rgb, const Template& t, float& dx, float& dy, float* win, int& wcx, int& wcy, float& err_out) {
+    wcx = (int)std::lround(t.ix + dx); wcy = (int)std::lround(t.iy + dy);
+    if (!extract_window(rgb, wcx, wcy, win)) return false;
+    float err = 0;
+    for (int it = 0; it < P_LK_ITERS; it++) {
+        const float px = t.ix + dx - (wcx - WR), py = t.iy + dy - (wcy - WR);  // centre in window coords
+        const int bx = (int)std::floor(px), by = (int)std::floor(py);
+        if (bx - PH < 0 || by - PH < 0 || bx + PH + 1 >= WS || by + PH + 1 >= WS) return false;
+        const float fx = px - bx, fy = py - by;
+        const float w00 = (1 - fx) * (1 - fy), w01 = fx * (1 - fy), w10 = (1 - fx) * fy, w11 = fx * fy;
+        float sx = 0, sy = 0;
+        err = 0;
+        int k = 0;
+        for (int yy = -PH; yy <= PH; yy++) {
+            const float* r0 = win + (by + yy) * WS + bx;
+            const float* r1 = r0 + WS;
+            for (int xx = -PH; xx <= PH; xx++, k++) {
+                const float v = w00 * r0[xx] + w01 * r0[xx + 1] + w10 * r1[xx] + w11 * r1[xx + 1];
+                const float e = v - t.T[k];
+                sx += t.gx[k] * e; sy += t.gy[k] * e;
+                err += std::fabs(e);
+            }
         }
-    const float tr = 0.5f * (sxx + syy), d = std::sqrt(0.25f * (sxx - syy) * (sxx - syy) + sxy * sxy);
-    return (tr - d) / 25.0f;
+        const float ux = t.i00 * sx + t.i01 * sy, uy = t.i01 * sx + t.i11 * sy;
+        dx -= ux; dy -= uy;
+        if (ux * ux + uy * uy < 0.0009f) break;
+    }
+    err_out = err / PN;
+    return err_out < P_LK_MAX_ERR && err_out < P_LK_REL_ERR * t.contrast + 1.0f;
+}
+
+// best Shi-Tomasi corner in a cell (gray coords [x0, x1) x [y0, y1)); score is the min eigenvalue of the 3 x 3
+// structure tensor per pixel. Returns false if none above P_MIN_SCORE.
+constexpr int CELL_MAX = (GW / P_GRID_X + 4) * (GH / P_GRID_Y + 4);
+bool best_corner(const uint8_t* rgb, int x0, int y0, int x1, int y1, int& bx, int& by) {
+    static float buf[CELL_MAX], gxb[CELL_MAX], gyb[CELL_MAX];
+    const int w = x1 - x0 + 4, h = y1 - y0 + 4;    // 2-pixel border for gradients + window
+    for (int y = 0; y < h; y++)
+        for (int x = 0; x < w; x++) buf[y * w + x] = green(rgb, x0 - 2 + x, y0 - 2 + y);
+    for (int y = 1; y < h - 1; y++)
+        for (int x = 1; x < w - 1; x++) {
+            gxb[y * w + x] = buf[y * w + x + 1] - buf[y * w + x - 1];
+            gyb[y * w + x] = buf[(y + 1) * w + x] - buf[(y - 1) * w + x];
+        }
+    float best = P_MIN_SCORE * 4 * 9;  // gradients are 2x central differences, 9 pixels
+    bx = -1;
+    for (int y = 2; y < h - 2; y += P_DETECT_STEP)
+        for (int x = 2; x < w - 2; x += P_DETECT_STEP) {
+            float sxx = 0, sxy = 0, syy = 0;
+            for (int dy = -1; dy <= 1; dy++)
+                for (int dx = -1; dx <= 1; dx++) {
+                    const float a = gxb[(y + dy) * w + x + dx], b = gyb[(y + dy) * w + x + dx];
+                    sxx += a * a; sxy += a * b; syy += b * b;
+                }
+            const float tr = 0.5f * (sxx + syy), d = std::sqrt(0.25f * (sxx - syy) * (sxx - syy) + sxy * sxy);
+            const float score = tr - d;
+            if (score > best) { best = score; bx = x0 - 2 + x; by = y0 - 2 + y; }
+        }
+    return bx >= 0;
 }
 
 // ------------------------------------------------------------------ estimator
@@ -188,6 +282,7 @@ struct Feature {
     bool has_pw;           // a triangulated world point from an earlier track (depth prior)
     V3 pw;
     double sig_rho;        // posterior inverse-depth std of that point
+    Template tpl;          // patch from the previous frame
 };
 
 struct Clone { int id; M3 R; V3 p; };
@@ -201,13 +296,14 @@ struct Estimator {
     M3 R_ic; V3 t_ic;           // camera -> IMU
     // state
     M3 R = M3::eye(); V3 p{0, 0, 0}, v{0, 0, 0}, bg{0, 0, 0}, ba{0, 0, 0}, g{0, 0, -GRAVITY};
-    Clone clones[P_CLONES]; int nclones = 0, next_clone_id = 0;
+    Clone clones[P_CLONES + 1]; int nclones = 0, next_clone_id = 0;
     Feature feats[P_MAX_FEAT]; int nfeats = 0, next_feat_id = 0;
-    Image img[2]; int cur = 0;
+    int detect_cell = 0;   // round-robin start of the corner search
     int frame = 0;
     double t_last = 0;
     V3 w_last{0, 0, 0};
     double depth_est = P_PRED_DEPTH;
+    double log_depth = std::log(P_DEPTH_PRIOR);  // running mean log-depth of well-triangulated points (adaptive prior)
     // diagnostics
     int st_tracked = 0, st_lost = 0, st_cand = 0, st_tri_fail = 0, st_chi_fail = 0, st_used = 0, st_rows = 0;
 
@@ -242,32 +338,40 @@ struct Estimator {
             T += dt;
         }
         orthonormalize(R);
-        // dense Phi for the IMU block: order th(0) p(3) v(6) bg(9) ba(12) g(15)
-        static double Phi[NI][NI];
-        std::memset(Phi, 0, sizeof(Phi));
-        for (int i = 0; i < NI; i++) Phi[i][i] = 1;
-        auto put = [&](int r0, int c0, const M3& B) { for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) Phi[r0 + i][c0 + j] += B.m[i][j]; };
-        put(0, 9, th_bg);
-        put(3, 0, p_th); put(3, 6, p_v); put(3, 9, p_bg); put(3, 12, p_ba); put(3, 15, p_g);
-        put(6, 0, v_th); put(6, 9, v_bg); put(6, 12, v_ba); put(6, 15, v_g);
+        // P <- Phi P Phi^T with the sparse Phi = I + blocks (block order th 0, p 1, v 2, bg 3, ba 4, g 5)
+        struct Blk { int r, c; const M3* M; };
+        const Blk blks[] = {{0, 3, &th_bg}, {1, 0, &p_th}, {1, 2, &p_v}, {1, 3, &p_bg}, {1, 4, &p_ba}, {1, 5, &p_g},
+                            {2, 0, &v_th}, {2, 3, &v_bg}, {2, 4, &v_ba}, {2, 5, &v_g}};
+        constexpr int NB = sizeof(blks) / sizeof(blks[0]);
         const int n = dim();
-        static double tmp[NI][NMAX];
-        // tmp = Phi * P[0:NI, :]
-        for (int i = 0; i < NI; i++)
-            for (int j = 0; j < n; j++) {
-                double s = 0;
-                for (int k = 0; k < NI; k++) s += Phi[i][k] * P[k][j];
-                tmp[i][j] = s;
+        static double tmp[9][NMAX];  // new rows of the th, p, v blocks: (Phi P)[0:9, :]
+        for (int i = 0; i < 9; i++) for (int j = 0; j < n; j++) tmp[i][j] = P[i][j];
+        for (int q = 0; q < NB; q++) {
+            const M3& M = *blks[q].M;
+            const int r0 = 3 * blks[q].r, c0 = 3 * blks[q].c;
+            for (int i = 0; i < 3; i++) {
+                const double m0 = M.m[i][0], m1 = M.m[i][1], m2 = M.m[i][2];
+                double* out = tmp[r0 + i];
+                const double *a0 = P[c0], *a1 = P[c0 + 1], *a2 = P[c0 + 2];
+                for (int j = 0; j < n; j++) out[j] += m0 * a0[j] + m1 * a1[j] + m2 * a2[j];
             }
-        // P[0:NI,0:NI] = tmp[:,0:NI] Phi^T ; P[0:NI, NI:] = tmp[:, NI:]
-        for (int i = 0; i < NI; i++)
-            for (int j = 0; j < NI; j++) {
-                double s = 0;
-                for (int k = 0; k < NI; k++) s += tmp[i][k] * Phi[j][k];
-                P[i][j] = s;
+        }
+        // rows 0..8 of Phi P are tmp; rows 9..17 are P's. Now (Phi P) Phi^T: columns 0..8 change the same way.
+        for (int i = 0; i < 9; i++) for (int j = 0; j < n; j++) P[i][j] = tmp[i][j];
+        static double tc[NI][9];  // new columns 0..8 for the IMU rows
+        for (int i = 0; i < NI; i++) for (int j = 0; j < 9; j++) tc[i][j] = P[i][j];
+        for (int q = 0; q < NB; q++) {
+            const M3& M = *blks[q].M;
+            const int r0 = 3 * blks[q].r, c0 = 3 * blks[q].c;
+            for (int i = 0; i < NI; i++) {
+                const double a0 = P[i][c0], a1 = P[i][c0 + 1], a2 = P[i][c0 + 2];
+                for (int j = 0; j < 3; j++) tc[i][r0 + j] += M.m[j][0] * a0 + M.m[j][1] * a1 + M.m[j][2] * a2;
             }
-        for (int i = 0; i < NI; i++)
-            for (int j = NI; j < n; j++) { P[i][j] = tmp[i][j]; P[j][i] = tmp[i][j]; }
+        }
+        for (int i = 0; i < NI; i++) for (int j = 0; j < 9; j++) P[i][j] = tc[i][j];
+        // symmetric fill: IMU-IMU block lower part and the IMU-clone cross terms
+        for (int i = 0; i < NI; i++) for (int j = 0; j < i; j++) { const double v2 = 0.5 * (P[i][j] + P[j][i]); P[i][j] = P[j][i] = v2; }
+        for (int i = 0; i < 9; i++) for (int j = NI; j < n; j++) P[j][i] = P[i][j];
         // process noise
         const double qg = P_GYRO_NOISE * P_GYRO_NOISE * T, qa = P_ACC_NOISE * P_ACC_NOISE * T;
         for (int i = 0; i < 3; i++) {
@@ -316,7 +420,7 @@ struct Estimator {
 
     // ---------------------------------------------------------------- update
     // Triangulate a feature (anchored inverse depth); fills the world point. Returns false if unusable.
-    bool triangulate(const Feature& f, V3& Pw, double* abr = nullptr, M3* Ranchor = nullptr) {  // abr: al, be, rho, posterior std, prior std
+    bool triangulate(const Feature& f, V3& Pw, double* abr, M3* Ranchor, bool use_prior) {  // abr: al, be, rho, posterior std, prior std
         const int n = f.nobs;
         M3 Rwc[MAX_OBS]; V3 pwc[MAX_OBS];
         for (int k = 0; k < n; k++) {
@@ -331,6 +435,7 @@ struct Estimator {
             tka[k] = Rwc[k].t() * (pwc[0] - pwc[k]);
         }
         double rho_prior = 1.0 / P_DEPTH_PRIOR, sig_prior = P_RHO_SIGMA;
+        if (P_ADAPT_DEPTH) { rho_prior = std::exp(-log_depth); sig_prior = P_RHO_REL * rho_prior; }
         if (P_CARRY_DEPTH && f.has_pw) {
             const V3 Pa = Rwc[0].t() * (f.pw - pwc[0]);
             if (Pa.z > 0.1) {
@@ -340,7 +445,7 @@ struct Estimator {
         }
         double al = f.obs[0].u, be = f.obs[0].v, rho = rho_prior;
         const double sn = P_SIGMA_PX / (fx * P_DS);
-        const double wprior = P_RHO_SIGMA > 0 ? std::pow(sn / sig_prior, 2) : 0.0;
+        const double wprior = use_prior && P_RHO_SIGMA > 0 ? std::pow(sn / sig_prior, 2) : 0.0;
         double h22inv = 0;
         double lambda = 1e-3;
         double cost_prev = 1e30;
@@ -413,14 +518,25 @@ struct Estimator {
     }
 
     // rows of the stacked, null-space projected update
-    double Hs[MAX_ROWS][NMAX];
+    double Hs[MAX_ROWS][6 * (P_CLONES + 1)];  // over the clone columns only (MSCKF rows do not involve the IMU state)
     double rs[MAX_ROWS];
 
     // builds a feature's projected rows into Hs/rs starting at `row`; returns the number of rows (0 if rejected)
     int feature_rows(Feature& f, int row) {
         V3 Pw; double abr[5]; M3 Ra;
         st_cand++;
-        if (!triangulate(f, Pw, abr, &Ra)) { st_tri_fail++; return 0; }
+        // well-observed points need no depth prior: project the whole point out (classic MSCKF); poorly observed ones
+        // (little parallax) keep the inverse-depth prior
+        bool prior = P_RHO_SIGMA > 0;
+        if (prior && P_PRIOR_SWITCH > 0 && triangulate(f, Pw, abr, &Ra, false) && abr[3] < P_PRIOR_SWITCH * abr[2]) {
+            prior = false;
+            if (P_ADAPT_DEPTH) {
+                log_depth += P_DEPTH_RATE * (-std::log(abr[2]) - log_depth);
+                log_depth = std::max(std::log(0.5), std::min(std::log(40.0), log_depth));
+                depth_est = std::exp(log_depth);
+            }
+        }
+        else if (!triangulate(f, Pw, abr, &Ra, prior)) { st_tri_fail++; return 0; }
         // dPw/d(al, be, rho) for the anchored inverse-depth parameters (anchor pose held at its estimate)
         const double id = 1.0 / abr[2];
         const V3 c0{Ra.m[0][0] * id, Ra.m[1][0] * id, Ra.m[2][0] * id};
@@ -464,7 +580,7 @@ struct Estimator {
         }
         // left null space of the (al, be) columns (all three without a depth prior) by Householder reflections on [Hf | Hx | r]
         const int nc = 6 * n;
-        const int npro = P_RHO_SIGMA > 0 ? 2 : 3;
+        const int npro = prior ? 2 : 3;
         for (int j = 0; j < npro; j++) {
             double s = 0;
             for (int i = j; i < m; i++) s += Hf[i][j] * Hf[i][j];
@@ -515,23 +631,21 @@ struct Estimator {
         }
         if (P_CHI2) {
             // S = Hx Pcc Hx^T + sig^2 I over the involved clones; chi-square test on r
+            int gidx[6 * MAX_OBS];
+            for (int c = 0; c < nc; c++) gidx[c] = NI + 6 * slot[c / 6] + c % 6;
+            double Pcc[6 * MAX_OBS][6 * MAX_OBS];
+            for (int a2 = 0; a2 < nc; a2++) {
+                const double* Prow = P[gidx[a2]];
+                for (int c = 0; c < nc; c++) Pcc[a2][c] = Prow[gidx[c]];
+            }
             double HP[2 * MAX_OBS][6 * MAX_OBS];
-            for (int i = 0; i < mr; i++)
-                for (int c = 0; c < nc; c++) {
-                    double s = 0;
-                    for (int k = 0; k < nc; k++) {
-                        const int gk = NI + 6 * slot[k / 6] + k % 6, gc = NI + 6 * slot[c / 6] + c % 6;
-                        s += Hx[i][k] * P[gk][gc];
-                    }
-                    HP[i][c] = s;
-                }
+            for (int i = 0; i < mr; i++) {
+                for (int c = 0; c < nc; c++) HP[i][c] = 0;
+                for (int k = 0; k < nc; k++) axpyd(HP[i], Pcc[k], Hx[i][k], nc);
+            }
             double S[2 * MAX_OBS][2 * MAX_OBS];
             for (int i = 0; i < mr; i++)
-                for (int j = 0; j < mr; j++) {
-                    double s = 0;
-                    for (int c = 0; c < nc; c++) s += HP[i][c] * Hx[j][c];
-                    S[i][j] = s + (i == j ? sig * sig : 0);
-                }
+                for (int j = 0; j < mr; j++) S[i][j] = dotd(HP[i], Hx[j], nc) + (i == j ? sig * sig : 0);
             // Cholesky solve
             double L[2 * MAX_OBS][2 * MAX_OBS] = {};
             for (int i = 0; i < mr; i++)
@@ -554,8 +668,8 @@ struct Estimator {
         }
         f.has_pw = true; f.pw = Pw; f.sig_rho = abr[3];
         for (int i = 0; i < mr; i++) {
-            for (int c = 0; c < nd; c++) Hs[row + i][c] = 0;
-            for (int c = 0; c < nc; c++) Hs[row + i][NI + 6 * slot[c / 6] + c % 6] += Hx[i][c];
+            for (int c = 0; c < 6 * (P_CLONES + 1); c++) Hs[row + i][c] = 0;
+            for (int c = 0; c < nc; c++) Hs[row + i][6 * slot[c / 6] + c % 6] += Hx[i][c];
             rs[row + i] = r[i];
         }
         return mr;
@@ -580,184 +694,307 @@ struct Estimator {
         if (sp > P_MAX_SPEED) v = v * (P_MAX_SPEED / sp);
     }
 
-    void ekf_update(int m) {
-        const int n = dim();
-        // compress when there are more rows than states (Householder QR of [H | r])
-        if (m > n) {
-            for (int j = 0; j < n; j++) {
+    // QR-compress the stacked rows to at most nc rows (nc = clone columns they involve); returns the row count
+    int compress_rows(int m, int nc) {
+        // compress when there are more rows than clone columns (Householder QR of [H | r])
+        if (m > nc) {
+            static double u[MAX_ROWS];
+            double d[6 * (P_CLONES + 1)];
+            for (int j = 0; j < nc; j++) {
                 double s = 0;
                 for (int i = j; i < m; i++) s += Hs[i][j] * Hs[i][j];
                 const double nrm = std::sqrt(s);
                 if (nrm < 1e-14) continue;
                 const double alpha = Hs[j][j] > 0 ? -nrm : nrm;
-                static double u[MAX_ROWS];
                 for (int i = j; i < m; i++) u[i] = Hs[i][j];
                 u[j] -= alpha;
-                double un = 0;
-                for (int i = j; i < m; i++) un += u[i] * u[i];
+                const double un = s - Hs[j][j] * Hs[j][j] + u[j] * u[j];
                 if (un < 1e-28) continue;
                 const double beta = 2.0 / un;
-                for (int c = j; c < n; c++) {
-                    double d = 0; for (int i = j; i < m; i++) d += u[i] * Hs[i][c];
-                    d *= beta; for (int i = j; i < m; i++) Hs[i][c] -= d * u[i];
-                }
-                double d = 0; for (int i = j; i < m; i++) d += u[i] * rs[i];
-                d *= beta; for (int i = j; i < m; i++) rs[i] -= d * u[i];
+                const int w = nc - j;
+                for (int c = 0; c < w; c++) d[c] = 0;
+                double dr = 0;
+                for (int i = j; i < m; i++) { axpyd(d, Hs[i] + j, u[i], w); dr += u[i] * rs[i]; }
+                for (int i = j; i < m; i++) { axpyd(Hs[i] + j, d, -beta * u[i], w); rs[i] -= beta * dr * u[i]; }
             }
-            m = n;
+            m = nc;
         }
+        return m;
+    }
+
+    void ekf_update(int m, int nc) {
+        const int n = dim();
         const double sig = P_SIGMA_PX / (fx * P_DS);
-        static double PHt[NMAX][MAX_ROWS > NMAX ? MAX_ROWS : NMAX];
-        static double S[NMAX][NMAX];
-        for (int i = 0; i < n; i++)
-            for (int j = 0; j < m; j++) {
-                double s = 0;
-                for (int k = 0; k < n; k++) s += P[i][k] * Hs[j][k];
-                PHt[i][j] = s;
-            }
-        for (int i = 0; i < m; i++)
-            for (int j = 0; j <= i; j++) {
-                double s = 0;
-                for (int k = 0; k < n; k++) s += Hs[i][k] * PHt[k][j];
-                S[i][j] = S[j][i] = s + (i == j ? sig * sig : 0);
-            }
+        constexpr int MR = MAX_ROWS > NMAX ? MAX_ROWS : NMAX;
+        static double PHt[NMAX][MR];
+        static double S[MR][MR];
+        for (int i = 0; i < n; i++) {
+            const double* Pi = &P[i][NI];
+            for (int j = 0; j < m; j++) PHt[i][j] = dotd(Pi, Hs[j], nc);
+        }
+        for (int i = 0; i < m; i++) {
+            double* Si = S[i];
+            for (int j = 0; j < m; j++) Si[j] = 0;
+            for (int k = 0; k < nc; k++) axpyd(Si, PHt[NI + k], Hs[i][k], m);
+            Si[i] += sig * sig;
+        }
         // Cholesky S = L L^T (in place, lower)
         for (int i = 0; i < m; i++)
             for (int j = 0; j <= i; j++) {
-                double s = S[i][j];
-                for (int k = 0; k < j; k++) s -= S[i][k] * S[j][k];
+                const double s = S[i][j] - dotd(S[i], S[j], j);
                 if (i == j) { if (s <= 1e-30) return; S[i][i] = std::sqrt(s); }
                 else S[i][j] = s / S[j][j];
             }
-        // K^T = S^{-1} (P H^T)^T : solve for each state i the m-vector PHt[i][:]
-        static double KT[NMAX][MAX_ROWS > NMAX ? MAX_ROWS : NMAX];  // KT[i][:] = row i of K
-        for (int i = 0; i < n; i++) {
-            double y[MAX_ROWS > NMAX ? MAX_ROWS : NMAX];
-            for (int a = 0; a < m; a++) {
-                double s = PHt[i][a];
-                for (int k = 0; k < a; k++) s -= S[a][k] * y[k];
-                y[a] = s / S[a][a];
-            }
-            for (int a = m - 1; a >= 0; a--) {
-                double s = y[a];
-                for (int k = a + 1; k < m; k++) s -= S[k][a] * KT[i][k];
-                KT[i][a] = s / S[a][a];
-            }
-        }
+        // W = P H^T L^{-T} (one triangular solve per state), then P -= W W^T and dx = W L^{-1} r
+        static double Wm[NMAX][MR];
+        double z[MR];
+        for (int a2 = 0; a2 < m; a2++) z[a2] = (rs[a2] - dotd(S[a2], z, a2)) / S[a2][a2];
         double dx[NMAX];
         for (int i = 0; i < n; i++) {
-            double s = 0;
-            for (int a = 0; a < m; a++) s += KT[i][a] * rs[a];
-            dx[i] = s;
+            double* w = Wm[i];
+            const double* ph = PHt[i];
+            for (int a2 = 0; a2 < m; a2++) w[a2] = (ph[a2] - dotd(S[a2], w, a2)) / S[a2][a2];
+            dx[i] = dotd(w, z, m);
         }
-        // P = P - K (P H^T)^T
-        for (int i = 0; i < n; i++)
+        for (int i = 0; i < n; i++) {
+            const double* wi = Wm[i];
             for (int j = i; j < n; j++) {
-                double s = 0;
-                for (int a = 0; a < m; a++) s += KT[i][a] * PHt[j][a];
-                const double val = P[i][j] - s;
+                const double val = P[i][j] - dotd(wi, Wm[j], m);
                 P[i][j] = val; P[j][i] = val;
             }
+        }
         for (int i = 0; i < n; i++) if (P[i][i] < 1e-12) P[i][i] = 1e-12;
         apply_correction(dx);
     }
 
     // features with >= P_MIN_OBS observations in `ids` (feature indices) are used in one update
-    void update_with(const int* idx, int count) {
+    // weak zero-mean velocity pseudo-measurement (bounds IMU-only drift when vision starves)
+    void velocity_prior(double sigma) {
+        const int n = dim();
+        double S[3][3];
+        for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) S[i][j] = P[6 + i][6 + j] + (i == j ? sigma * sigma : 0);
+        // invert 3x3
+        const double det = S[0][0] * (S[1][1] * S[2][2] - S[1][2] * S[2][1]) - S[0][1] * (S[1][0] * S[2][2] - S[1][2] * S[2][0]) + S[0][2] * (S[1][0] * S[2][1] - S[1][1] * S[2][0]);
+        if (std::fabs(det) < 1e-30) return;
+        double I[3][3];
+        I[0][0] = (S[1][1] * S[2][2] - S[1][2] * S[2][1]) / det; I[0][1] = (S[0][2] * S[2][1] - S[0][1] * S[2][2]) / det; I[0][2] = (S[0][1] * S[1][2] - S[0][2] * S[1][1]) / det;
+        I[1][0] = (S[1][2] * S[2][0] - S[1][0] * S[2][2]) / det; I[1][1] = (S[0][0] * S[2][2] - S[0][2] * S[2][0]) / det; I[1][2] = (S[0][2] * S[1][0] - S[0][0] * S[1][2]) / det;
+        I[2][0] = (S[1][0] * S[2][1] - S[1][1] * S[2][0]) / det; I[2][1] = (S[0][1] * S[2][0] - S[0][0] * S[2][1]) / det; I[2][2] = (S[0][0] * S[1][1] - S[0][1] * S[1][0]) / det;
+        static double K[NMAX][3];
+        const double r[3] = {-v.x, -v.y, -v.z};
+        double dx[NMAX];
+        for (int i = 0; i < n; i++) {
+            for (int a = 0; a < 3; a++) K[i][a] = P[i][6] * I[0][a] + P[i][7] * I[1][a] + P[i][8] * I[2][a];
+            dx[i] = K[i][0] * r[0] + K[i][1] * r[1] + K[i][2] * r[2];
+        }
+        for (int i = 0; i < n; i++)
+            for (int j = i; j < n; j++) {
+                const double val = P[i][j] - (K[i][0] * P[6][j] + K[i][1] * P[7][j] + K[i][2] * P[8][j]);
+                P[i][j] = val; P[j][i] = val;
+            }
+        apply_correction(dx);
+    }
+
+    int pending_m = 0, pending_nc = 0;  // split update: rows computed at a clone frame, applied at the next frame
+
+    void update_with(const int* idx, int count, bool apply = true) {
         int rows = 0, used = 0;
         double depth_sum = 0; int depth_n = 0;
         for (int q = 0; q < count && used < P_MAX_UPDATE_FEAT; q++) {
             Feature& f = feats[idx[q]];
             if (f.nobs < P_MIN_OBS) continue;
+            unsigned long long t_ = 0;
+#if !defined(__wasm__) && defined(P_PROF)
+            t_ = __rdtsc();
+#endif
             const int got = feature_rows(f, rows);
+#if !defined(__wasm__) && defined(P_PROF)
+            prof_acc[3] += __rdtsc() - t_;
+#endif
+            (void)t_;
             if (got > 0) { rows += got; used++; st_used++; st_rows += got; (void)depth_sum; (void)depth_n; }
         }
-        if (rows > 0) ekf_update(rows);
+        if (rows == 0) return;
+        const int nc = 6 * nclones;
+        rows = compress_rows(rows, nc);
+        if (apply) { PROF_BEGIN(); ekf_update(rows, nc); PROF_END(4); }
+        else { pending_m = rows; pending_nc = nc; }
     }
 
     // ---------------------------------------------------------------- front end
     void pixel_to_norm(float x, float y, double& u, double& v) const { u = (x - cx) / fx; v = (y - cy) / fy; }
 
-    void detect(const Image& im) {
-        if (nfeats >= P_DETECT_BELOW) return;
+    void detect(const uint8_t* rgb, int max_cells) {
+        int nalive = 0;
+        for (int k = 0; k < nfeats; k++) nalive += feats[k].alive;
+        if (nalive >= P_DETECT_BELOW) return;
         constexpr int CW = GW / P_GRID_X, CH = GH / P_GRID_Y;
-        int occupied[P_GRID_Y][P_GRID_X] = {};
+        int occupied[P_GRID_Y * P_GRID_X] = {};
         for (int k = 0; k < nfeats; k++) {
-            const int gx = std::min(P_GRID_X - 1, (int)(feats[k].x / CW)), gy = std::min(P_GRID_Y - 1, (int)(feats[k].y / CH));
-            occupied[gy][gx]++;
+            if (!feats[k].alive) continue;
+            const int gx = std::min(P_GRID_X - 1, std::max(0, (int)(feats[k].x / CW))), gy = std::min(P_GRID_Y - 1, std::max(0, (int)(feats[k].y / CH)));
+            occupied[gy * P_GRID_X + gx]++;
         }
-        const int border = P_HALF + 3;
-        for (int gy = 0; gy < P_GRID_Y && nfeats < P_MAX_FEAT; gy++)
-            for (int gx = 0; gx < P_GRID_X && nfeats < P_MAX_FEAT; gx++) {
-                if (occupied[gy][gx]) continue;
-                float best = P_MIN_SCORE; int bx = -1, by = -1;
-                const int x0 = std::max(border, gx * CW), x1 = std::min(GW - border, (gx + 1) * CW);
-                const int y0 = std::max(border, gy * CH), y1 = std::min(GH - border, (gy + 1) * CH);
-                for (int y = y0; y < y1; y += P_DETECT_STEP)
-                    for (int x = x0; x < x1; x += P_DETECT_STEP) {
-                        const float s = corner_score(im, x, y);
-                        if (s > best) { best = s; bx = x; by = y; }
-                    }
-                if (bx < 0) continue;
-                Feature& f = feats[nfeats++];
-                f.id = next_feat_id++; f.x = (float)bx; f.y = (float)by; f.nobs = 0; f.alive = true; f.has_pw = false;
-            }
+        const int border = WR + 1;
+        int searched = 0;
+        for (int q = 0; q < P_GRID_X * P_GRID_Y && nfeats < P_MAX_FEAT && searched < max_cells; q++) {
+            const int c = (detect_cell + q) % (P_GRID_X * P_GRID_Y);
+            if (occupied[c]) continue;
+            const int gx = c % P_GRID_X, gy = c / P_GRID_X;
+            const int x0 = std::max(border, gx * CW), x1 = std::min(GW - border, (gx + 1) * CW);
+            const int y0 = std::max(border, gy * CH), y1 = std::min(GH - border, (gy + 1) * CH);
+            searched++;
+            int bx, by;
+            if (x1 - x0 < 3 || y1 - y0 < 3 || !best_corner(rgb, x0, y0, x1, y1, bx, by)) continue;
+            Feature& f = feats[nfeats];
+            static float win[WS * WS];
+            if (!extract_window(rgb, bx, by, win)) continue;
+            make_template(win, bx, by, bx, by, f.tpl);
+            if (!f.tpl.ok) continue;
+            nfeats++;
+            f.id = next_feat_id++; f.x = (float)bx; f.y = (float)by; f.nobs = 0; f.alive = true; f.has_pw = false;
+        }
+        detect_cell = (detect_cell + std::max(searched, 1)) % (P_GRID_X * P_GRID_Y);
+    }
+
+    // fuel attribution: run `fn` once on a saved copy of the estimator and P, then restore (P_DOUBLE bitmask)
+    template <class F> void twice(int bit, F fn) {
+        if (!(P_DOUBLE & bit)) return;
+        static Estimator* saved = nullptr;
+        static double Psaved[NMAX][NMAX];
+        if (!saved) saved = (Estimator*)std::malloc(sizeof(Estimator));
+        std::memcpy((void*)saved, (const void*)this, sizeof(Estimator));
+        std::memcpy(Psaved, P, sizeof(P));
+        fn();
+        std::memcpy((void*)this, (const void*)saved, sizeof(Estimator));
+        std::memcpy(P, Psaved, sizeof(P));
     }
 
     // ---------------------------------------------------------------- per frame
     void step(double t, const uint8_t* rgb, const double* imu, int count, double* out) {
-        Image& im = img[cur ^ 1];
-        make_gray(rgb, im);
         if (frame == 0) {
             init_state(imu, count);
             t_last = t;
             add_clone();
-            detect(im);
-            record_obs(im);
+            detect(rgb, P_GRID_X * P_GRID_Y);
+            record_obs();
         } else {
             const M3 R_prev = R; const V3 p_prev = p;
-            propagate(imu, count);
-            track(img[cur], im, R_prev, p_prev);
+            twice(8, [&] { propagate(imu, count); });
+            twice(64, [] {});
+            PROF_BEGIN(); if (!(P_SKIP & 8)) propagate(imu, count); PROF_END(0);
+            twice(4, [&] { velocity_prior(P_VPRIOR_SIGMA); });
+            if (P_VPRIOR_SIGMA > 0 && !(P_SKIP & 4)) velocity_prior(P_VPRIOR_SIGMA);
+            twice(1, [&] { track(rgb, R_prev, p_prev); });
+            PROF_BEGIN(); if (!(P_SKIP & 1)) track(rgb, R_prev, p_prev); PROF_END(1);
             const bool clone_frame = frame % P_CLONE_EVERY == 0;
-            if (clone_frame) {
-                if (nclones == P_CLONES) {
-                    // features seen in the oldest clone: use them now, then drop the clone
-                    const int oldest = clones[0].id;
-                    int idx[P_MAX_FEAT]; int ni = 0;
-                    for (int k = 0; k < nfeats; k++) if (feats[k].nobs > 0 && feats[k].obs[0].clone_id == oldest) idx[ni++] = k;
-                    update_with(idx, ni);
-                    for (int k = 0; k < ni; k++) {
+            if (P_SPLIT == 2) {
+                // rows on the frame before a clone frame; at the clone frame: EKF update, drop the oldest clone, add the new one
+                if (clone_frame) {
+                    if (pending_m) {
+                        twice(16, [&] { ekf_update(pending_m, pending_nc); });
+                        PROF_BEGIN(); ekf_update(pending_m, pending_nc); PROF_END(4);
+                        pending_m = 0;
+                    }
+                    if (nclones == P_CLONES) {
+                        const int oldest = clones[0].id;
+                        for (int k = 0; k < nfeats; k++) {
+                            Feature& f = feats[k];
+                            if (f.nobs > 0 && f.obs[0].clone_id == oldest) { for (int q = 1; q < f.nobs; q++) f.obs[q - 1] = f.obs[q]; f.nobs--; }
+                        }
+                        remove_clone(0);
+                    }
+                    add_clone();
+                    record_obs();
+                } else if ((frame + 1) % P_CLONE_EVERY == 0) {
+                    int idx[P_MAX_FEAT]; int ni = 0, nforced = 0;
+                    if (nclones == P_CLONES) {
+                        const int oldest = clones[0].id;
+                        for (int k = 0; k < nfeats; k++) if (feats[k].alive && feats[k].nobs > 0 && feats[k].obs[0].clone_id == oldest) idx[ni++] = k;
+                        nforced = ni;
+                    }
+                    for (int k = 0; k < nfeats; k++) if (!feats[k].alive) idx[ni++] = k;
+                    twice(32, [&] { if (ni) update_with(idx, ni, false); });
+                    if (ni) update_with(idx, ni, false);
+                    for (int k = 0; k < nforced; k++) { Feature& f = feats[idx[k]]; if (f.nobs >= P_MIN_OBS) f.nobs = 0; }
+                    for (int k = nforced; k < ni; k++) feats[idx[k]].nobs = -1;
+                }
+                int w = 0;
+                for (int k = 0; k < nfeats; k++) if (feats[k].alive || feats[k].nobs >= 0) feats[w++] = feats[k];
+                nfeats = w;
+            } else if (P_SPLIT) {
+                // rows at clone frames, the EKF update at the next frame; lost features wait for the next clone frame
+                if (pending_m) {
+                    twice(16, [&] { ekf_update(pending_m, pending_nc); });
+                    PROF_BEGIN(); ekf_update(pending_m, pending_nc); PROF_END(4);
+                    pending_m = 0;
+                }
+                if (nclones > P_CLONES) remove_clone(0);
+                if (clone_frame) {
+                    int idx[P_MAX_FEAT]; int ni = 0, nforced = 0;
+                    const bool full = nclones == P_CLONES;
+                    if (full) {
+                        const int oldest = clones[0].id;
+                        for (int k = 0; k < nfeats; k++) if (feats[k].alive && feats[k].nobs > 0 && feats[k].obs[0].clone_id == oldest) idx[ni++] = k;
+                        nforced = ni;
+                    }
+                    for (int k = 0; k < nfeats; k++) if (!feats[k].alive) idx[ni++] = k;
+                    twice(32, [&] { if (ni) update_with(idx, ni, false); });
+                    if (ni) update_with(idx, ni, false);
+                    for (int k = 0; k < nforced; k++) {
                         Feature& f = feats[idx[k]];
-                        if (f.nobs >= P_MIN_OBS) f.nobs = 0;  // used: start a fresh track from here
+                        if (f.nobs >= P_MIN_OBS) f.nobs = 0;
                         else { for (int q = 1; q < f.nobs; q++) f.obs[q - 1] = f.obs[q]; f.nobs--; }
                     }
-                    remove_clone(0);
+                    for (int k = nforced; k < ni; k++) feats[idx[k]].nobs = -1;  // processed: remove below
+                    add_clone();  // the oldest clone goes after the pending update
+                    record_obs();
                 }
-                add_clone();
-                record_obs(im);
+                int w = 0;
+                for (int k = 0; k < nfeats; k++) if (feats[k].alive || feats[k].nobs >= 0) feats[w++] = feats[k];
+                nfeats = w;
+            } else {
+            // one update per frame: lost features, and at clone frames (window full) the features seen in the oldest clone
+            int idx[P_MAX_FEAT]; int ni = 0, nforced = 0;
+            const bool drop_oldest = clone_frame && nclones == P_CLONES;
+            if (drop_oldest) {
+                const int oldest = clones[0].id;
+                for (int k = 0; k < nfeats; k++) if (feats[k].alive && feats[k].nobs > 0 && feats[k].obs[0].clone_id == oldest) idx[ni++] = k;
+                nforced = ni;
             }
-            // features lost this frame
-            int lost[P_MAX_FEAT]; int nl = 0;
-            for (int k = 0; k < nfeats; k++) if (!feats[k].alive) lost[nl++] = k;
-            if (nl) update_with(lost, nl);
+            for (int k = 0; k < nfeats; k++) if (!feats[k].alive) idx[ni++] = k;
+            if (ni) update_with(idx, ni);
+            if (drop_oldest) {
+                for (int k = 0; k < nforced; k++) {
+                    Feature& f = feats[idx[k]];
+                    if (f.nobs >= P_MIN_OBS) f.nobs = 0;  // used: start a fresh track from here
+                    else { for (int q = 1; q < f.nobs; q++) f.obs[q - 1] = f.obs[q]; f.nobs--; }
+                }
+                remove_clone(0);
+            }
+            if (clone_frame) {
+                add_clone();
+                record_obs();
+            }
             int w = 0;
             for (int k = 0; k < nfeats; k++) if (feats[k].alive) feats[w++] = feats[k];
             nfeats = w;
-            detect(im);
-            if (clone_frame) record_obs_new(im);
+            }
+            twice(2, [&] { detect(rgb, P_DETECT_CELLS); });
+            PROF_BEGIN(); if (!(P_SKIP & 2)) detect(rgb, P_DETECT_CELLS); PROF_END(2);
+            if (clone_frame) record_obs_new();
         }
-        cur ^= 1;
         frame++;
         write_output(out);
     }
 
-    void record_obs(const Image&) {
+    void record_obs() {
         for (int k = 0; k < nfeats; k++) if (feats[k].alive) push_obs(feats[k]);
     }
-    void record_obs_new(const Image&) {  // newly detected features get their first observation at this clone
+    void record_obs_new() {  // newly detected features get their first observation at this clone
         const int id = clones[nclones - 1].id;
         for (int k = 0; k < nfeats; k++)
-            if (feats[k].nobs == 0 || feats[k].obs[feats[k].nobs - 1].clone_id != id) push_obs(feats[k]);
+            if (feats[k].alive && (feats[k].nobs == 0 || feats[k].obs[feats[k].nobs - 1].clone_id != id)) push_obs(feats[k]);
     }
     void push_obs(Feature& f) {
         const int id = clones[nclones - 1].id;
@@ -766,27 +1003,35 @@ struct Estimator {
         f.obs[f.nobs++] = {id, u, vv};
     }
 
-    void track(const Image& a, const Image& b, const M3& R_prev, const V3& p_prev) {
+    void track(const uint8_t* rgb, const M3& R_prev, const V3& p_prev) {
         // predicted camera motion: camera at prev -> camera now
         const M3 Rwc0 = R_prev * R_ic, Rwc1 = R * R_ic;
         const V3 pwc0 = R_prev * t_ic + p_prev, pwc1 = R * t_ic + p;
         const M3 R10 = Rwc1.t() * Rwc0;
         const V3 t10 = Rwc1.t() * (pwc0 - pwc1);
+        static float win[WS * WS];
         for (int k = 0; k < nfeats; k++) {
             Feature& f = feats[k];
+            if (!f.alive) continue;
             double u, vv; pixel_to_norm(f.x, f.y, u, vv);
             const V3 X = V3{u, vv, 1} * depth_est;
             const V3 Y = R10 * X + t10;
             float px = f.x, py = f.y;
             if (Y.z > 0.05) { px = (float)(fx * Y.x / Y.z + cx); py = (float)(fy * Y.y / Y.z + cy); }
-            float x = px, y = py;
-            bool ok = track_lk(a, b, f.x, f.y, x, y);
-            if (!ok && (px != f.x || py != f.y)) { x = f.x; y = f.y; ok = track_lk(a, b, f.x, f.y, x, y); }
-            if (ok && P_FB_CHECK) {
-                float bx = f.x, by = f.y;
-                if (!track_lk(b, a, x, y, bx, by) || (bx - f.x) * (bx - f.x) + (by - f.y) * (by - f.y) > 0.5f) ok = false;
+            float dx = px - f.x, dy = py - f.y, err;
+            int wcx, wcy;
+            bool ok = track_template(rgb, f.tpl, dx, dy, win, wcx, wcy, err);
+            if (!ok && (px != f.x || py != f.y)) { dx = dy = 0; ok = track_template(rgb, f.tpl, dx, dy, win, wcx, wcy, err); }
+            if (ok) {
+                f.x += dx; f.y += dy;
+                const int ix = (int)std::lround(f.x), iy = (int)std::lround(f.y);
+                // next template from the same window when it covers the new grid patch
+                make_template(win, wcx, wcy, ix, iy, f.tpl);
+                if (!f.tpl.ok && extract_window(rgb, ix, iy, win)) make_template(win, ix, iy, ix, iy, f.tpl);
+                // the template sits on the integer grid: keep the subpixel position, track the grid patch from it
+                if (!f.tpl.ok) ok = false;
             }
-            if (ok) { f.x = x; f.y = y; st_tracked++; } else { f.alive = false; st_lost++; }
+            if (ok) st_tracked++; else { f.alive = false; st_lost++; }
         }
     }
 
@@ -896,6 +1141,12 @@ VIOBENCH_EXPORT(init) int32_t init(const char* json, uint32_t length) {
 
 #ifndef __wasm__
 // host diagnostics: [frame, nfeats, nclones, tracked, lost, cand, tri_fail, chi_fail, used, rows, v(3), bg(3), ba(3), g(3), sd_v(3), sd_tilt]
+int32_t debug_prof(double* o) {
+#ifdef P_PROF
+    for (int i = 0; i < 8; i++) { o[i] = (double)prof_acc[i]; prof_acc[i] = 0; }
+#endif
+    return 0;
+}
 int32_t debug_state(double* o) {
     Estimator& e = *estimator;
     double vals[] = {(double)e.frame, (double)e.nfeats, (double)e.nclones, (double)e.st_tracked, (double)e.st_lost, (double)e.st_cand,
