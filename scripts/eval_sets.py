@@ -32,10 +32,12 @@ def zero_ate(paths):
 def evaluate(name, wasm, set_name, directory):
     out = ROOT / "outputs" / "sets" / set_name / name
     out.parent.mkdir(parents=True, exist_ok=True)
-    cmd = [str(ROOT / ".venv-vio/bin/viobench"), "evaluate", str(wasm), str(directory), "-o", str(out)]
+    cmd = [str(ROOT / ".venv-vio/bin/viobench"), "evaluate", str(wasm)] + ([] if directory == "public" else [str(directory)]) + ["-o", str(out)]
     log = out.with_suffix(".log")
+    import os
+    env = {**os.environ, "CONTA_CACHE": os.environ.get("CONTA_CACHE", str(ROOT / "work/conta-cache"))}
     with open(log, "w") as f:
-        r = subprocess.run(cmd, stdout=f, stderr=subprocess.STDOUT)
+        r = subprocess.run(cmd, stdout=f, stderr=subprocess.STDOUT, env=env)
     if r.returncode != 0:
         return name, set_name, None
     rep = json.loads((out / "report.json").read_text())
@@ -61,7 +63,11 @@ def main():
     a = p.parse_args()
     sets = dict(s.split("=", 1) for s in a.set)
     builds = dict(b.split("=", 1) for b in a.builds)
-    zero = {s: zero_ate(sorted(Path(d).glob("*.zip"))) for s, d in sets.items()}
+    def paths(d):
+        if d == "public":
+            return (ROOT / "work/public.list").read_text().split()
+        return sorted(Path(d).glob("*.zip"))
+    zero = {s: zero_ate(paths(d)) for s, d in sets.items()}
     with ThreadPoolExecutor(a.jobs) as pool:
         results = list(pool.map(lambda job: evaluate(*job), [(n, w, s, d) for n, w in builds.items() for s, d in sets.items()]))
     table = {n: {} for n in builds}

@@ -218,3 +218,6 @@
 #ifndef P_PHI_FRAME
 #define P_PHI_FRAME 0       // transition matrix once per frame from interval sums instead of per IMU sample
 #endif
+#ifndef P_DETECT_MULT
+#define P_DETECT_MULT P_CLONE_EVERY  // split mode: cells searched on a light frame = P_DETECT_CELLS * this
+#endif

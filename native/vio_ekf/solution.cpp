@@ -1545,7 +1545,7 @@ struct Estimator {
 #ifndef __wasm__
             if (ext_n < 0)
 #endif
-            PROF_BEGIN(); if (!(P_SKIP & 2) && light) detect(rgb, P_BALANCE && P_SPLIT ? P_DETECT_CELLS * P_CLONE_EVERY : P_DETECT_CELLS); PROF_END(2);
+            PROF_BEGIN(); if (!(P_SKIP & 2) && light) detect(rgb, P_BALANCE && P_SPLIT ? P_DETECT_CELLS * P_DETECT_MULT : P_DETECT_CELLS); PROF_END(2);
             if (clone_frame) record_obs_new();
         }
         frame++;
